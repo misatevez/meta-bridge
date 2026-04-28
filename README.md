@@ -33,12 +33,14 @@ meta-bridge/
 │   ├── logger.ts        pino instance
 │   ├── routes/
 │   │   └── webhook.ts   GET (verify) + POST (HMAC) handlers
-│   ├── services/        (vacía — B3: firma HMAC, B4: OAuth2 SuiteCRM)
-│   └── db/              (vacía — B5: schema MariaDB)
+│   ├── services/
+│   │   └── suitecrm.ts  Cliente OAuth2 API V8 + helpers Contact/Lead/Note
+│   └── db/              (vacía — B4: schema MariaDB)
 └── tests/
     ├── setup.ts         Env stubs para vitest
     ├── smoke.test.ts    GET /health → 200
-    └── webhook.test.ts  GET verify + POST HMAC
+    ├── webhook.test.ts  GET verify + POST HMAC
+    └── suitecrm.test.ts SuiteCrmClient (token + helpers + 401 retry)
 ```
 
 ## Webhook (Meta)
@@ -55,6 +57,35 @@ openssl rand -hex 32
 ```
 
 Copialo a `META_VERIFY_TOKEN` en `.env` y configurá el mismo valor en la Meta App (Webhooks → Verify Token) cuando llegue Fase B.
+
+## SuiteCRM API V8 client
+
+`src/services/suitecrm.ts` expone `SuiteCrmClient(baseUrl, clientId, clientSecret)`:
+
+- `getAccessToken()` — POST `/legacy/Api/access_token` (`grant_type=client_credentials`). Cachea el JWT en memoria con `expires_at`; refresca automáticamente cuando faltan menos de 60s.
+- `request(method, path, body?)` — agrega `Authorization: Bearer <token>` y `Accept: application/vnd.api+json`. Si el server responde 401, invalida el cache, pide token nuevo y reintenta una vez.
+- `findContactByPhone(e164)` — busca en `Contacts` por `phone_mobile` (sin `+`, formato wa_id). Devuelve `null` si no existe.
+- `createLead({ firstName, lastName, phoneE164, source })` — POST a `/legacy/Api/V8/module` con `data.type = "Leads"`.
+- `appendNote(parentType, parentId, body)` — crea Note con `parent_type` + `parent_id` apuntando al Contact o Lead.
+
+Errores 4xx/5xx se propagan como `SuiteCrmApiError(status, body)`.
+
+### Smoke test manual contra `firmas`
+
+No va al repo (usa credenciales reales del Architect):
+
+```bash
+# Cargar SUITECRM_OAUTH_CLIENT_ID + SUITECRM_OAUTH_CLIENT_SECRET en el shell desde el vault
+node --input-type=module -e "
+import { SuiteCrmClient } from './dist/services/suitecrm.js';
+const c = new SuiteCrmClient(
+  'https://firmas.moacrm.com',
+  process.env.SUITECRM_OAUTH_CLIENT_ID,
+  process.env.SUITECRM_OAUTH_CLIENT_SECRET,
+);
+console.log(await c.findContactByPhone('+5491100000000'));
+"
+```
 
 ## Setup local
 
@@ -129,12 +160,12 @@ Resumen de la decisión: bridge externo en el mismo VM (`132.145.128.135`) bajo 
 
 Sprint 2 Fase A:
 
-- B1 — Bootstrap repo (este).
-- B2 — Endpoint webhook (verify GET + receive POST).
-- B3 — Verificación de firma HMAC.
-- B4 — Cliente OAuth2 contra SuiteCRM API V8.
-- B5 — Schema DB (`meta_bridge`).
-- B6 — Tests + deploy + smoke E2E.
+- B1 — Bootstrap repo.
+- B2 — Webhook (verify GET + HMAC POST).
+- B3 — Cliente OAuth2 SuiteCRM API V8 + helpers Contact/Lead/Note (este).
+- B4 — Schema DB (`meta_bridge`).
+- B5 — Logging JSON + healthcheck + dedup.
+- B6 — Tests E2E + auditoría de seguridad + CI.
 
 Cuando el cliente conecte canales reales (WABA / Page / IG Business) → Sprint 2 Fase B suscribe los webhook fields y carga Phone Number ID, WABA ID y Permanent Token.
 
