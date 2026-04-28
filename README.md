@@ -35,7 +35,11 @@ meta-bridge/
 │   │   └── webhook.ts   GET (verify) + POST (HMAC) handlers
 │   ├── services/
 │   │   └── suitecrm.ts  Cliente OAuth2 API V8 + helpers Contact/Lead/Note
-│   └── db/              (vacía — B4: schema MariaDB)
+│   └── db/              (vacía — runtime queries en B5+)
+├── db/
+│   ├── migrate.ts       Runner idempotente (mysql2 + _migrations)
+│   └── migrations/
+│       └── 001-initial.sql
 └── tests/
     ├── setup.ts         Env stubs para vitest
     ├── smoke.test.ts    GET /health → 200
@@ -133,6 +137,88 @@ pm2 save
 ```
 
 `pm2 logs meta-bridge` para ver tail de logs (pino los emite a stdout).
+
+## Database
+
+DB nueva en MariaDB OCI managed (`129.213.101.91:3306`), aislada de `firmascrm`. El user `meta_bridge` solo tiene permisos sobre la base `meta_bridge` (`SHOW GRANTS FOR 'meta_bridge'@'%';`).
+
+### Schema
+
+| Tabla | Rol |
+|---|---|
+| `wa_messages` | Log de mensajes WhatsApp (in/out). PK `id`, UNIQUE `wamid` (deduplicación de webhooks Meta), índices por `wa_id` y `created_at`. |
+| `bridge_oauth_tokens` | Cache opcional del access token OAuth2 contra SuiteCRM API V8. Una sola fila (PK `id` = 1). |
+| `wa_contacts_map` | Cache `wa_id` → `contact_id_suitecrm` para evitar buscar Contact por phone en cada mensaje. |
+| `_migrations` | Registro de migrations aplicadas (mantenido por `db/migrate.ts`). |
+
+ER diagram completo: ver `docs/sprint2/B4-meta-bridge-schema.md` en el repo `misatevez/suitecrm`.
+
+### Migrations
+
+Las migrations viven en `db/migrations/NNN-name.sql` (3 dígitos, orden léxico). El runner `db/migrate.ts`:
+
+1. Crea la tabla `_migrations` si no existe.
+2. Lee qué versiones ya se aplicaron.
+3. Ejecuta solo las pendientes, en orden, registrando cada una al cerrar.
+
+Es idempotente — reaplicar es no-op.
+
+```bash
+# Asegurate de tener .env con DB_HOST/PORT/USER/PASS/NAME apuntando a meta_bridge.
+npm install
+npm run db:migrate
+```
+
+Output esperado en una corrida limpia:
+
+```
+INFO applying { version: '001', name: '001-initial' }
+INFO migrations complete { ran: 1, total: 1 }
+```
+
+En la segunda corrida:
+
+```
+INFO skip — already applied { version: '001', name: '001-initial' }
+INFO migrations complete { ran: 0, total: 1 }
+```
+
+### Conexión local (administrativa)
+
+Para inspeccionar la DB desde el server (que sí tiene cliente `mysql` y red privada hacia OCI):
+
+```bash
+ssh ubuntu@132.145.128.135
+mysql -h 129.213.101.91 -u meta_bridge -p meta_bridge
+# password: (custodia del Architect)
+SHOW TABLES;
+SELECT * FROM _migrations;
+```
+
+Aplicar manualmente la migration sin pasar por el runner Node:
+
+```bash
+mysql -h 129.213.101.91 -u meta_bridge -p meta_bridge < db/migrations/001-initial.sql
+```
+
+### Bootstrap inicial (una sola vez, root)
+
+La creación de la DB y el user `meta_bridge` está documentada en `docs/sprint2/B4-meta-bridge-schema.md` del repo `suitecrm`. Resumen:
+
+```sql
+CREATE DATABASE meta_bridge CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'meta_bridge'@'%' IDENTIFIED BY '<password>';
+GRANT ALL PRIVILEGES ON meta_bridge.* TO 'meta_bridge'@'%';
+FLUSH PRIVILEGES;
+```
+
+`meta_bridge` **no** tiene grants sobre `firmascrm` ni ninguna otra base. Validable con:
+
+```sql
+SHOW GRANTS FOR 'meta_bridge'@'%';
+-- GRANT USAGE ON *.* TO `meta_bridge`@`%`
+-- GRANT ALL PRIVILEGES ON `meta_bridge`.* TO `meta_bridge`@`%`
+```
 
 ## Variables de entorno
 
