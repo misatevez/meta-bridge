@@ -3,6 +3,7 @@ import 'dotenv/config';
 export interface Config {
   nodeEnv: 'development' | 'production' | 'test';
   port: number;
+  host: string;
   logLevel: string;
   meta: {
     appId: string;
@@ -43,6 +44,7 @@ export function loadConfig(): Config {
   return {
     nodeEnv,
     port: readEnvInt('PORT', 3000),
+    host: readEnv('HOST', '127.0.0.1'),
     logLevel: readEnv('LOG_LEVEL', 'info'),
     meta: {
       appId: readEnv('META_APP_ID'),
