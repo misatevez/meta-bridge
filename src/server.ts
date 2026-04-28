@@ -48,8 +48,11 @@ const app = createApp({
   healthChecks,
 });
 
-const server = app.listen(config.port, () => {
-  logger.info({ port: config.port, env: config.nodeEnv }, 'meta-bridge listening');
+const server = app.listen(config.port, config.host, () => {
+  logger.info(
+    { host: config.host, port: config.port, env: config.nodeEnv },
+    'meta-bridge listening',
+  );
 });
 
 function shutdown(signal: string): void {
