@@ -76,4 +76,33 @@ describe('POST /webhook (HMAC)', () => {
 
     expect(res.status).toBe(401);
   });
+
+  it('returns 401 when the body has been altered after signing', async () => {
+    const app = createApp();
+    const original = '{"object":"page","entry":[{"id":"123","time":0,"messaging":[]}]}';
+    const altered = '{"object":"page","entry":[{"id":"999","time":0,"messaging":[]}]}';
+    const sig = sign(original, APP_SECRET);
+
+    const res = await request(app)
+      .post('/webhook')
+      .set('Content-Type', 'application/json')
+      .set('X-Hub-Signature-256', `sha256=${sig}`)
+      .send(altered);
+
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 401 when the signature header has the wrong prefix', async () => {
+    const app = createApp();
+    const body = '{"object":"page","entry":[]}';
+    const sig = sign(body, APP_SECRET);
+
+    const res = await request(app)
+      .post('/webhook')
+      .set('Content-Type', 'application/json')
+      .set('X-Hub-Signature-256', `sha1=${sig}`)
+      .send(body);
+
+    expect(res.status).toBe(401);
+  });
 });

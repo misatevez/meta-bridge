@@ -113,6 +113,17 @@ curl http://localhost:3000/health
 npm test
 ```
 
+CI corre `npm run typecheck`, `npm test` y `npm audit --omit=dev --audit-level=high` en cada push (`.github/workflows/test.yml`). Cobertura E2E: HMAC válido / inválido / alterado / sin header, idempotencia (5×, 2×), refresh OAuth2 en 401, 429 con Retry-After (retry una vez), 5xx propagado, helmet headers, rate-limit `/webhook`.
+
+## Hardening
+
+- **HMAC** — Firma sobre `rawBody` con `crypto.timingSafeEqual` (no `===`). Body alterado tras firma → 401.
+- **Helmet** — `helmet()` aplica baseline de headers (HSTS, X-Frame-Options, X-Content-Type-Options, oculta `X-Powered-By`).
+- **Rate limit** — `express-rate-limit` sobre `/webhook`: 100 req/min por IP en producción. Configurable por test vía `createApp({ webhookRateLimitMax, webhookRateLimitWindowMs })`.
+- **429 backoff** — `SuiteCrmClient.request()` reintenta una sola vez tras 429, honra `Retry-After` (segs o HTTP-date), tope 30s. Si persiste, propaga `SuiteCrmApiError(429, body)`. No hay loop infinito.
+- **Secrets** — `.env` está en `.gitignore`. No hay credenciales hardcoded en `src/`. App Secret y client secret se inyectan vía `process.env` en runtime.
+- **Trust proxy** — `app.set('trust proxy', 1)` para que el rate-limit identifique IP real detrás del Apache reverse proxy.
+
 ## Observability
 
 ### Logging

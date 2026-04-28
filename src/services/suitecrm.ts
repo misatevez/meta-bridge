@@ -72,6 +72,26 @@ interface CachedToken {
 const REFRESH_LEEWAY_MS = 60_000;
 const TOKEN_PATH = '/legacy/Api/access_token';
 const MODULE_PATH = '/legacy/Api/V8/module';
+const DEFAULT_429_BACKOFF_MS = 1_000;
+const MAX_429_BACKOFF_MS = 30_000;
+
+function parseRetryAfterMs(header: unknown): number | null {
+  if (typeof header !== 'string' || header.length === 0) return null;
+  const trimmed = header.trim();
+  const seconds = Number.parseInt(trimmed, 10);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(seconds * 1000, MAX_429_BACKOFF_MS);
+  }
+  const dateMs = Date.parse(trimmed);
+  if (!Number.isFinite(dateMs)) return null;
+  const delta = dateMs - Date.now();
+  return delta > 0 ? Math.min(delta, MAX_429_BACKOFF_MS) : 0;
+}
+
+async function delay(ms: number): Promise<void> {
+  if (ms <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export class SuiteCrmClient {
   private readonly http: AxiosInstance;
@@ -150,6 +170,13 @@ export class SuiteCrmClient {
     if (res.status === 401) {
       this.cached = null;
       token = await this.getAccessToken();
+      res = await send(token);
+    }
+
+    if (res.status === 429) {
+      const retryAfter = parseRetryAfterMs(res.headers?.['retry-after']);
+      const waitMs = retryAfter ?? DEFAULT_429_BACKOFF_MS;
+      await delay(waitMs);
       res = await send(token);
     }
 

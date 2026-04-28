@@ -87,6 +87,47 @@ describe('POST /webhook dedup by wamid', () => {
     expect(store.rows.has('wamid.HBgL12345')).toBe(true);
   });
 
+  it('produces exactly 1 row when the same webhook is delivered 5 times', async () => {
+    const store = makeStore();
+    const app = createApp({ messageStore: store });
+
+    const body = whatsappWebhookBody('wamid.RETRY-5x');
+    const sig = sign(body);
+
+    for (let i = 0; i < 5; i++) {
+      const res = await request(app)
+        .post('/webhook')
+        .set('Content-Type', 'application/json')
+        .set('X-Hub-Signature-256', `sha256=${sig}`)
+        .send(body);
+      expect(res.status).toBe(200);
+    }
+
+    expect(store.calls).toHaveLength(5);
+    expect(store.rows.size).toBe(1);
+    expect(store.rows.has('wamid.RETRY-5x')).toBe(true);
+  });
+
+  it('produces 2 rows when 2 distinct webhooks are delivered', async () => {
+    const store = makeStore();
+    const app = createApp({ messageStore: store });
+
+    for (const wamid of ['wamid.X', 'wamid.Y']) {
+      const body = whatsappWebhookBody(wamid);
+      const sig = sign(body);
+      const res = await request(app)
+        .post('/webhook')
+        .set('Content-Type', 'application/json')
+        .set('X-Hub-Signature-256', `sha256=${sig}`)
+        .send(body);
+      expect(res.status).toBe(200);
+    }
+
+    expect(store.rows.size).toBe(2);
+    expect(store.rows.has('wamid.X')).toBe(true);
+    expect(store.rows.has('wamid.Y')).toBe(true);
+  });
+
   it('inserts distinct wamids from different deliveries', async () => {
     const store = makeStore();
     const app = createApp({ messageStore: store });
