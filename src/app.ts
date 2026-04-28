@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import express, { type Express, type Request, type Response } from 'express';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import pinoHttp from 'pino-http';
 import { logger } from './logger.js';
 import { registerWebhookRoutes } from './routes/webhook.js';
@@ -24,12 +26,25 @@ const NOOP_HEALTH: HealthChecks = {
 export interface AppDeps {
   messageStore?: MessageStore;
   healthChecks?: HealthChecks;
+  webhookRateLimitMax?: number;
+  webhookRateLimitWindowMs?: number;
 }
+
+const DEFAULT_WEBHOOK_RATE_LIMIT_MAX = 100;
+const DEFAULT_WEBHOOK_RATE_LIMIT_WINDOW_MS = 60_000;
 
 export function createApp(deps: AppDeps = {}): Express {
   const app = express();
   const messageStore = deps.messageStore ?? NOOP_STORE;
   const healthChecks = deps.healthChecks ?? NOOP_HEALTH;
+  const rateLimitMax = deps.webhookRateLimitMax ?? DEFAULT_WEBHOOK_RATE_LIMIT_MAX;
+  const rateLimitWindow = deps.webhookRateLimitWindowMs ?? DEFAULT_WEBHOOK_RATE_LIMIT_WINDOW_MS;
+
+  // Trust proxy: production runs behind Apache reverse proxy, so honor the
+  // first hop's X-Forwarded-For for per-IP rate limiting.
+  app.set('trust proxy', 1);
+
+  app.use(helmet());
 
   app.use(
     pinoHttp({
@@ -44,6 +59,15 @@ export function createApp(deps: AppDeps = {}): Express {
       customProps: (req) => ({ request_id: req.id }),
     }),
   );
+
+  const webhookLimiter = rateLimit({
+    windowMs: rateLimitWindow,
+    limit: rateLimitMax,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'rate_limited' },
+  });
+  app.use('/webhook', webhookLimiter);
 
   // Webhook routes mount their own raw-body parser scoped to POST /webhook so
   // HMAC can be verified over the unparsed payload. Must be registered before

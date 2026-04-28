@@ -233,4 +233,98 @@ describe('SuiteCrmClient error propagation', () => {
       expect(apiErr.body).toEqual({ errors: [{ title: 'boom' }] });
     }
   });
+
+  it('does not loop on repeated 5xx — bubbles up after the first failure', async () => {
+    tokenScope();
+    const scope = nock(BASE)
+      .get('/legacy/Api/V8/module/Contacts')
+      .query(true)
+      .reply(503, { errors: [{ title: 'unavailable' }] });
+
+    const client = new SuiteCrmClient(BASE, CLIENT_ID, CLIENT_SECRET);
+    await expect(client.findContactByPhone('+12025550100')).rejects.toBeInstanceOf(SuiteCrmApiError);
+    expect(scope.isDone()).toBe(true);
+    // No remaining interceptors means the client did not silently retry 5xx.
+    expect(nock.pendingMocks()).toEqual([]);
+  });
+});
+
+describe('SuiteCrmClient 429 backoff + retry', () => {
+  it('retries once after 429 with Retry-After honored and succeeds', async () => {
+    tokenScope();
+
+    nock(BASE)
+      .get('/legacy/Api/V8/module/Contacts')
+      .query(true)
+      .reply(429, { error: 'rate_limited' }, { 'Retry-After': '0' });
+
+    nock(BASE)
+      .get('/legacy/Api/V8/module/Contacts')
+      .query(true)
+      .reply(200, { data: [] });
+
+    const client = new SuiteCrmClient(BASE, CLIENT_ID, CLIENT_SECRET);
+    const start = Date.now();
+    const result = await client.findContactByPhone('+12025550100');
+    const elapsed = Date.now() - start;
+    expect(result).toBeNull();
+    // Retry-After: 0 means we should not wait the default 1s.
+    expect(elapsed).toBeLessThan(900);
+    expect(nock.isDone()).toBe(true);
+  });
+
+  it('throws SuiteCrmApiError if 429 persists after one retry (no infinite loop)', async () => {
+    tokenScope();
+
+    nock(BASE)
+      .get('/legacy/Api/V8/module/Contacts')
+      .query(true)
+      .reply(429, { error: 'rate_limited' }, { 'Retry-After': '0' });
+
+    nock(BASE)
+      .get('/legacy/Api/V8/module/Contacts')
+      .query(true)
+      .reply(429, { error: 'still_rate_limited' }, { 'Retry-After': '0' });
+
+    const client = new SuiteCrmClient(BASE, CLIENT_ID, CLIENT_SECRET);
+    try {
+      await client.findContactByPhone('+12025550100');
+      throw new Error('expected SuiteCrmApiError');
+    } catch (err) {
+      expect(err).toBeInstanceOf(SuiteCrmApiError);
+      expect((err as SuiteCrmApiError).status).toBe(429);
+    }
+    expect(nock.isDone()).toBe(true);
+    // No further requests issued — confirms exactly one retry.
+    expect(nock.pendingMocks()).toEqual([]);
+  });
+});
+
+describe('SuiteCrmClient token expiry', () => {
+  it('refreshes the cached token after it expires', async () => {
+    // Token expires almost immediately so the leeway check forces a refresh.
+    tokenScope('jwt-1', 1);
+    nock(BASE)
+      .get('/legacy/Api/V8/module/Contacts')
+      .query(true)
+      .matchHeader('authorization', 'Bearer jwt-1')
+      .reply(200, { data: [] });
+
+    const client = new SuiteCrmClient(BASE, CLIENT_ID, CLIENT_SECRET);
+    const first = await client.findContactByPhone('+12025550100');
+    expect(first).toBeNull();
+
+    // Second call: leeway will treat the cached token as expired, so the
+    // client must call /access_token again before the GET.
+    tokenScope('jwt-2', 3600);
+    nock(BASE)
+      .get('/legacy/Api/V8/module/Contacts')
+      .query(true)
+      .matchHeader('authorization', 'Bearer jwt-2')
+      .reply(200, { data: [] });
+
+    const second = await client.findContactByPhone('+12025550100');
+    expect(second).toBeNull();
+    expect(nock.isDone()).toBe(true);
+  });
 });
