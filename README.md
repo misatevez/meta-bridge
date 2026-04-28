@@ -113,6 +113,76 @@ curl http://localhost:3000/health
 npm test
 ```
 
+## Observability
+
+### Logging
+
+`src/logger.ts` exporta una instancia única de `pino`.
+
+- **Producción** (`NODE_ENV=production`) — JSON line-delimited a `stdout`. Parseable con `jq`, `lnav`, Loki/Grafana, etc.
+  ```bash
+  pm2 logs meta-bridge --raw | jq 'select(.level >= 40)'   # solo warn+
+  pm2 logs meta-bridge --raw | jq -r '.request_id + " " + (.msg // "")'
+  ```
+- **Desarrollo** (`NODE_ENV=development`) — formato amigable (colores + timestamp legible) vía `pino-pretty`. No requiere flag adicional, lo activa el logger cuando detecta `NODE_ENV=development`.
+- **Tests** (`NODE_ENV=test`) — `LOG_LEVEL=silent` por default (ver `tests/setup.ts`).
+
+Niveles: `info`, `warn`, `error`, `fatal`. El nivel mínimo por default es `info`, configurable vía `LOG_LEVEL`.
+
+Cada request HTTP recibe un `request_id` (UUID v4, o el valor del header `X-Request-Id` entrante si viene) que `pino-http` propaga en cada log line del request y se devuelve en el header `X-Request-Id` de la respuesta. Permite correlacionar logs con clientes externos (Meta, SuiteCRM) que repropagan el header.
+
+```bash
+# Tail JSON en producción
+pm2 logs meta-bridge --raw
+
+# Tail JSON con resaltado en dev
+npm run dev
+```
+
+### Healthcheck
+
+`GET /health` evalúa cada dependencia y devuelve un body JSON con el estado consolidado.
+
+```json
+{
+  "status": "ok",
+  "checks": { "db": "ok", "suitecrm": "ok" },
+  "uptime": 142.31,
+  "version": "0.1.0"
+}
+```
+
+Reglas:
+
+- `status` es `ok` si **todos** los checks pasan; `degraded` si alguno falla pero el proceso sigue arriba.
+- El endpoint **siempre** responde HTTP 200 — la decisión de marcar al servicio como caído queda fuera (PM2 / monitoring externo). Esto evita que un blip transitorio en la DB tire al server de detrás del LB.
+- `version` se lee de `package.json` al boot.
+
+Checks actuales:
+
+| Check | Verifica |
+|---|---|
+| `db` | `SELECT 1` contra el pool MySQL (`meta_bridge` en MariaDB OCI). |
+| `suitecrm` | `getAccessToken()` del `SuiteCrmClient` — devuelve cache si está vigente, refresca contra `/legacy/Api/access_token` si expiró. |
+
+```bash
+curl -s https://meta-bridge.moacrm.com/health | jq .
+curl -s http://localhost:3000/health | jq .
+```
+
+### Deduplicación de webhooks
+
+Meta reentrega un webhook si el bridge no responde 200 en menos de ~5s. Cada `messages[i]` que llega al `POST /webhook` se inserta en `wa_messages` con `INSERT IGNORE` apoyado en `UNIQUE (wamid)`:
+
+- Si la fila era nueva → se procesa (`webhook message stored`).
+- Si ya existía → se loguea `duplicate webhook, skipping` y se descarta silenciosamente.
+
+El bridge **siempre** responde 200 a la entrega (incluso a duplicadas) para que Meta no reintente.
+
+### Errores no capturados
+
+`src/server.ts` engancha `uncaughtException` y `unhandledRejection`: loguea como `fatal` y deja al supervisor (PM2) relevantar el proceso. Al ejecutar bajo `pm2 start dist/server.js --name meta-bridge`, los reinicios se ven con `pm2 status`.
+
 ## Build + producción local
 
 ```bash
