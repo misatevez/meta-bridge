@@ -31,12 +31,30 @@ meta-bridge/
 │   ├── app.ts           Express app factory + GET /health
 │   ├── config.ts        Lee .env y tipa todo
 │   ├── logger.ts        pino instance
-│   ├── routes/          (vacía — B2: webhook GET/POST)
+│   ├── routes/
+│   │   └── webhook.ts   GET (verify) + POST (HMAC) handlers
 │   ├── services/        (vacía — B3: firma HMAC, B4: OAuth2 SuiteCRM)
 │   └── db/              (vacía — B5: schema MariaDB)
 └── tests/
-    └── smoke.test.ts    GET /health → 200
+    ├── setup.ts         Env stubs para vitest
+    ├── smoke.test.ts    GET /health → 200
+    └── webhook.test.ts  GET verify + POST HMAC
 ```
+
+## Webhook (Meta)
+
+El bridge expone `https://meta-bridge.moacrm.com/webhook` para recibir eventos de WhatsApp Cloud API / Instagram / Facebook Pages.
+
+- **`GET /webhook`** — handshake de verificación. Meta envía `hub.mode=subscribe`, `hub.verify_token` y `hub.challenge`. Si el verify token matchea `META_VERIFY_TOKEN`, respondemos `hub.challenge` como `text/plain` 200. Caso contrario 403.
+- **`POST /webhook`** — entrega de eventos. Validamos `X-Hub-Signature-256` haciendo `HMAC-SHA256(rawBody, META_APP_SECRET)` y comparando en tiempo constante (`crypto.timingSafeEqual`). Si la firma valida, 200. Si no, 401.
+
+### Generar el verify token
+
+```bash
+openssl rand -hex 32
+```
+
+Copialo a `META_VERIFY_TOKEN` en `.env` y configurá el mismo valor en la Meta App (Webhooks → Verify Token) cuando llegue Fase B.
 
 ## Setup local
 
