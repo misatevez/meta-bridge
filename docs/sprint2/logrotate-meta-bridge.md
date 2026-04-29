@@ -1,102 +1,124 @@
-# Logrotate Configuration for meta-bridge PM2 Logs
+# Sprint Cleanup: Logrotate Configuration for meta-bridge (INF-1115)
 
-**Issue:** INF-1115  
-**Status:** Deployed to production  
-**Date:** 2026-04-29  
+**Date**: 2026-04-29  
+**Status**: Ready for deployment  
+**Issue**: [INF-1115](mention://issue/7a907540-ea15-4240-8448-76bee01a1de9)
 
-## Objective
+## Overview
 
-Set up log rotation for PM2 JSON-formatted logs from the `meta-bridge` process running on `132.145.128.135`.
-Ensures logs don't consume all disk space and maintains a rolling 14-day window of logs.
+Configured logrotate for PM2 meta-bridge process logs to prevent unbounded disk growth. Mirrors the existing suitecrm-firmas-cron configuration with 14-day retention and daily rotation.
 
-## Configuration Applied
+## Configuration
 
-**File:** `/etc/logrotate.d/meta-bridge`
+**File**: `/etc/logrotate.d/meta-bridge`
 
-```ini
-/home/ubuntu/.pm2/logs/meta-bridge-*.log {
+```
+/home/ubuntu/.pm2/logs/meta-bridge-out.log
+/home/ubuntu/.pm2/logs/meta-bridge-error.log
+{
     daily
     rotate 14
     compress
-    delaycompress
     missingok
     notifempty
     copytruncate
-    sharedscripts
 }
 ```
 
-### Configuration Rationale
+## Key Decisions
 
-- **copytruncate** — Critical for PM2 compatibility. Copies the log file and truncates in place rather than moving it, allowing PM2 to keep writing to the same file handle.
-- **daily** — Matches the rotation schedule for other system logs.
-- **rotate 14** — Retains 14 days of historical logs (sufficient for incident investigation).
-- **compress** — Reduces storage after delaycompress period (saves ~80% disk space on JSON logs).
-- **delaycompress** — Delays compression until the next rotation, allowing same-day log access without decompression.
-- **missingok** — Gracefully handles cases where PM2 hasn't created a log file yet.
-- **notifempty** — Skips rotation for empty log files (reduces unnecessary churn).
+### copytruncate vs rotate
 
-## Deployment Steps
+- **copytruncate**: Copy file content → truncate in place → PM2 keeps same file handle
+- **rotate**: Rename file → create new file → PM2 may lose handle if not configured properly
 
-### On the server (`ubuntu@132.145.128.135`):
+**Chosen**: `copytruncate` ensures PM2 continues writing without gaps.
 
-1. **Verify log path:**
-   ```bash
-   pm2 show meta-bridge
-   pm2 logs meta-bridge --lines 0
-   ```
-   Expected: Log files at `/home/ubuntu/.pm2/logs/meta-bridge-out.log` and/or `meta-bridge-error.log`
+## Installation & Testing
 
-2. **Install logrotate config:**
-   ```bash
-   sudo cp /path/to/infra/logrotate/meta-bridge /etc/logrotate.d/meta-bridge
-   sudo chown root:root /etc/logrotate.d/meta-bridge
-   sudo chmod 644 /etc/logrotate.d/meta-bridge
-   ```
+### Install on server
 
-3. **Dry-run test:**
-   ```bash
-   sudo logrotate -d /etc/logrotate.d/meta-bridge
-   ```
-   Expected: Output shows what would be rotated (no changes made).
+```bash
+ssh ubuntu@132.145.128.135
+cd meta-bridge
+sudo cp infra/logrotate/meta-bridge /etc/logrotate.d/meta-bridge
+sudo chmod 644 /etc/logrotate.d/meta-bridge
+```
 
-4. **Force first rotation:**
-   ```bash
-   sudo logrotate -f /etc/logrotate.d/meta-bridge
-   ```
+### Test dry-run
 
-5. **Verify PM2 still writes:**
-   ```bash
-   pm2 logs meta-bridge --lines 5
-   sleep 5
-   pm2 logs meta-bridge --lines 5
-   ```
-   Expected: New log lines appear after sleep (confirms copytruncate is working).
+```bash
+# Shows what would happen
+sudo logrotate -d /etc/logrotate.d/meta-bridge
 
-6. **Check rotated logs:**
-   ```bash
-   ls -lh /home/ubuntu/.pm2/logs/ | grep meta-bridge
-   ```
-   Expected: Original log file size reduced, dated backup with or without .gz extension.
+# Should output something like:
+# rotating pattern: /home/ubuntu/.pm2/logs/meta-bridge-out.log
+# rotating pattern: /home/ubuntu/.pm2/logs/meta-bridge-error.log
+# ... no actions taken in this mode
+```
 
-## Verification Checklist
+### Force rotation test
 
-- [x] Configuration file created with correct log paths
-- [x] copytruncate option present (PM2 handle preservation)
-- [x] Dry-run logrotate check passes
-- [x] Forced rotation completes without errors
-- [x] PM2 continues logging to original file after rotation
-- [x] Rotated logs are compressed (after delaycompress cycle)
-- [x] System cron job (`/etc/cron.daily/*` or `cron.daily` directory) will run logrotate automatically
+```bash
+# Actually rotates logs
+sudo logrotate -f /etc/logrotate.d/meta-bridge
 
-## Related
+# Verify PM2 still writing
+pm2 logs meta-bridge --lines 5
 
-- Companion config: `/etc/logrotate.d/suitecrm-firmas` (cron scheduler logs)
-- Meta-bridge repo: https://github.com/misatevez/meta-bridge
-- Sprint 2 Fase A: Bridge infrastructure deployment
+# Check compressed logs
+ls -lah /home/ubuntu/.pm2/logs/meta-bridge-* | head -10
+```
 
-## Notes
+### Verify file handles preserved
 
-- Log files are JSON-formatted by Orion (structured logging).
-- PM2 writes to separate `-out.log` and `-error.log` files by default; wildcard pattern matches both.
-- `copytruncate` is essential due to PM2's daemon model (does not reopen logs on SIGHUP).
+```bash
+# Before rotation:
+ls -i /home/ubuntu/.pm2/logs/meta-bridge-out.log
+
+# After rotation:
+ls -i /home/ubuntu/.pm2/logs/meta-bridge-out.log
+
+# Inode should remain the same (copytruncate preserves)
+```
+
+## Standard PM2 Log Paths
+
+PM2 (ubuntu user) stores logs in `/home/ubuntu/.pm2/logs/` by default:
+- `meta-bridge-out.log` - stdout from the process
+- `meta-bridge-error.log` - stderr from the process
+
+Verify with:
+```bash
+pm2 show meta-bridge | grep -i "log"
+ls -la /home/ubuntu/.pm2/logs/meta-bridge-*
+```
+
+## Paridad with suitecrm-firmas-cron
+
+Same configuration exists at `/etc/logrotate.d/suitecrm-firmas-cron` on the server:
+
+```bash
+# Reference:
+sudo cat /etc/logrotate.d/suitecrm-firmas-cron
+```
+
+## Code References
+
+- **Logrotate config**: `infra/logrotate/meta-bridge`
+- **Install docs**: `infra/logrotate/README.md`
+- **Repo**: https://github.com/misatevez/meta-bridge
+- **Smoke test reference**: `infra/monitoring/meta-bridge-smoke.sh` (shows PM2 log paths)
+
+## Deployment
+
+1. Merge PR to `main`
+2. SSH to server
+3. Pull latest meta-bridge
+4. Run: `sudo cp infra/logrotate/meta-bridge /etc/logrotate.d/meta-bridge`
+5. Test with dry-run and force rotation
+6. Verify PM2 continues writing
+
+## Related Issues
+
+- **INF-1116**: Smoke test recurrent meta-bridge + alert (depends on this for log reliability)
