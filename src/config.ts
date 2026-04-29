@@ -10,6 +10,14 @@ export interface Config {
     appSecret: string;
     verifyToken: string;
   };
+  waba: {
+    phoneNumberId: string;
+    id: string;
+    accessToken: string;
+  };
+  bridge: {
+    apiKey: string;
+  };
   suitecrm: {
     baseUrl: string;
     oauthClientId: string;
@@ -50,6 +58,14 @@ export function loadConfig(): Config {
       appId: readEnv('META_APP_ID'),
       appSecret: readEnv('META_APP_SECRET'),
       verifyToken: readEnv('META_VERIFY_TOKEN'),
+    },
+    waba: {
+      phoneNumberId: readEnv('META_WABA_PHONE_NUMBER_ID'),
+      id: readEnv('META_WABA_ID'),
+      accessToken: readEnv('META_ACCESS_TOKEN'),
+    },
+    bridge: {
+      apiKey: readEnv('BRIDGE_API_KEY'),
     },
     suitecrm: {
       baseUrl: readEnv('SUITECRM_BASE_URL', 'https://firmas.moacrm.com'),
