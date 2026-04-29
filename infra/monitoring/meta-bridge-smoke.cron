@@ -1,0 +1,8 @@
+# meta-bridge smoke test — runs every 5 minutes as root
+# Install: sudo cp infra/monitoring/meta-bridge-smoke.cron /etc/cron.d/meta-bridge-smoke
+#          sudo chmod 644 /etc/cron.d/meta-bridge-smoke
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+*/5 * * * * root /usr/local/bin/meta-bridge-smoke.sh >> /var/log/meta-bridge-smoke.log 2>&1
