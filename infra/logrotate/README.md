@@ -1,58 +1,61 @@
-# Meta-Bridge Logrotate Configuration
+# Logrotate Configuration for meta-bridge
 
-## Overview
-This directory contains logrotate configuration for PM2 logs of the meta-bridge process.
+This directory contains the logrotate configuration for PM2 logs from the `meta-bridge` process.
 
 ## Installation
 
-1. Copy the config to the system logrotate directory:
-```bash
-sudo cp meta-bridge /etc/logrotate.d/meta-bridge
-sudo chmod 644 /etc/logrotate.d/meta-bridge
-```
+1. Verify the actual log path on the server:
+   ```bash
+   ssh ubuntu@132.145.128.135
+   pm2 show meta-bridge
+   pm2 logs meta-bridge --lines 0
+   ```
 
-2. Test the configuration (dry-run):
+2. Copy the configuration file to the system logrotate directory:
+   ```bash
+   sudo cp infra/logrotate/meta-bridge /etc/logrotate.d/meta-bridge
+   sudo chown root:root /etc/logrotate.d/meta-bridge
+   sudo chmod 644 /etc/logrotate.d/meta-bridge
+   ```
+
+## Configuration Details
+
+The logrotate config includes:
+- **daily**: Rotate logs once per day
+- **rotate 14**: Keep 14 rotated log files (14 days of logs)
+- **compress**: Compress rotated logs with gzip
+- **delaycompress**: Delay compression until the next rotation cycle
+- **missingok**: Don't error if log file is missing
+- **notifempty**: Don't rotate empty log files
+- **copytruncate**: Copy and truncate the log file instead of moving it (allows PM2 to keep writing without losing handle)
+- **sharedscripts**: Run scripts once, not for each log file
+
+## Verification
+
+### Dry-run test:
 ```bash
 sudo logrotate -d /etc/logrotate.d/meta-bridge
 ```
 
-3. Force rotation to verify it works:
+### Force rotation:
 ```bash
 sudo logrotate -f /etc/logrotate.d/meta-bridge
 ```
 
-4. Verify PM2 is still writing logs:
+### Verify PM2 continues writing:
 ```bash
 pm2 logs meta-bridge --lines 5
 ```
 
-## Configuration Details
+Should show recent log entries without errors.
 
-- **Target logs**: `/home/ubuntu/.pm2/logs/meta-bridge*.log`
-- **Rotation**: Daily
-- **Retention**: 14 days
-- **Compression**: Enabled (gzip)
-- **copytruncate**: Preserves file handle for PM2 to keep writing
+## Troubleshooting
 
-## Verification
+If PM2 stops writing logs after rotation:
+- Check that the `copytruncate` option is present (allows inode reuse)
+- Verify the log path is correct with `pm2 show meta-bridge`
+- Check `/var/log/syslog` for logrotate errors
 
-After installation and force-rotation, verify:
+## Related Documentation
 
-1. Check logrotate status:
-```bash
-ls -la /home/ubuntu/.pm2/logs/
-```
-
-2. Verify PM2 process is still writing:
-```bash
-pm2 logs meta-bridge --lines 10
-```
-
-3. Check for any PM2 errors:
-```bash
-pm2 show meta-bridge
-```
-
-## Notes
-
-The `copytruncate` option ensures PM2 doesn't lose its file handle during rotation - it copies the file contents and truncates the original instead of moving it.
+See `docs/sprint2/logrotate-meta-bridge.md` for deployment verification and results.
