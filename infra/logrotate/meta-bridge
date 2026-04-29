@@ -1,0 +1,11 @@
+# Logrotate configuration for meta-bridge PM2 logs
+# Install: sudo cp infra/logrotate/meta-bridge /etc/logrotate.d/meta-bridge
+
+/home/ubuntu/.pm2/logs/meta-bridge*.log {
+    daily
+    compress
+    rotate 14
+    missingok
+    notifempty
+    copytruncate
+}
