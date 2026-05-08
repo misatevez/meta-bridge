@@ -14,6 +14,12 @@ const pool = mysql.createPool({
   database: config.db.database,
   connectionLimit: 5,
   timezone: 'Z',
+  connectTimeout: 10000,
+  // OCI stateful firewall drops idle TCP after ~5 min; keepAlive prevents it
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
+  waitForConnections: true,
+  queueLimit: 10,
 });
 
 const suitecrm = new SuiteCrmClient(
@@ -24,8 +30,11 @@ const suitecrm = new SuiteCrmClient(
 
 const healthChecks: HealthChecks = {
   async db(): Promise<CheckStatus> {
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('db health check timed out')), 5000).unref(),
+    );
     try {
-      await pool.query('SELECT 1');
+      await Promise.race([pool.query('SELECT 1'), timeout]);
       return 'ok';
     } catch (err) {
       logger.warn({ err }, 'health: db check failed');
