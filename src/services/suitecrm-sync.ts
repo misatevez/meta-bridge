@@ -27,11 +27,36 @@ export interface SuiteCrmSyncService {
   syncMessage(params: SyncMessageParams): Promise<void>;
 }
 
-export function createSuiteCrmSyncService(pool: Pool): SuiteCrmSyncService {
+async function resolveMessengerDisplayName(psid: string, pageAccessToken: string, cache: Map<string, string>): Promise<string> {
+  const cached = cache.get(psid);
+  if (cached !== undefined) return cached;
+
+  try {
+    const url = `https://graph.facebook.com/v19.0/${psid}?fields=name&access_token=${pageAccessToken}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      logger.warn({ psid, status: res.status }, 'messenger: Graph API name lookup failed, using PSID');
+      cache.set(psid, psid);
+      return psid;
+    }
+    const data = await res.json() as Record<string, unknown>;
+    const name = typeof data.name === 'string' && data.name.length > 0 ? data.name : psid;
+    cache.set(psid, name);
+    return name;
+  } catch (err) {
+    logger.warn({ err, psid }, 'messenger: Graph API name lookup error, using PSID');
+    cache.set(psid, psid);
+    return psid;
+  }
+}
+
+export function createSuiteCrmSyncService(pool: Pool, pageAccessToken = ''): SuiteCrmSyncService {
+  const messengerContactsMap = new Map<string, string>();
+
   return {
     async syncMessage(params) {
       try {
-        await doSync(pool, params);
+        await doSync(pool, params, pageAccessToken, messengerContactsMap);
       } catch (err) {
         logger.error({ err, wamid: params.wamid, waId: params.waId }, 'suitecrm-sync: failed — not blocking webhook');
       }
@@ -39,7 +64,7 @@ export function createSuiteCrmSyncService(pool: Pool): SuiteCrmSyncService {
   };
 }
 
-async function doSync(pool: Pool, params: SyncMessageParams): Promise<void> {
+async function doSync(pool: Pool, params: SyncMessageParams, pageAccessToken: string, messengerContactsMap: Map<string, string>): Promise<void> {
   const {
     waId,
     wamid,
@@ -52,6 +77,11 @@ async function doSync(pool: Pool, params: SyncMessageParams): Promise<void> {
     phoneNumberId,
     channel = 'whatsapp',
   } = params;
+
+  // For Messenger, resolve display_name via Graph API; for WhatsApp use profileName as-is
+  const displayName = channel === 'messenger'
+    ? await resolveMessengerDisplayName(waId, pageAccessToken, messengerContactsMap)
+    : (profileName || waId);
 
   const conn = await pool.getConnection();
   try {
@@ -79,12 +109,12 @@ async function doSync(pool: Pool, params: SyncMessageParams): Promise<void> {
           phoneNumberId,
           waId,
           contactIdSuitecrm ?? '',
-          profileName || waId,
+          displayName,
           now,
           now,
         ],
       );
-      logger.info({ conversationId, waId }, 'suitecrm-sync: created meta_conversation');
+      logger.info({ conversationId, waId, channel }, 'suitecrm-sync: created meta_conversation');
     }
 
     // Step 3: create message
