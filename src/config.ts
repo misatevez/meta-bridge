@@ -9,6 +9,8 @@ export interface Config {
     appId: string;
     appSecret: string;
     verifyToken: string;
+    pageAccessToken: string;
+    pageId: string;
   };
   waba: {
     phoneNumberId: string;
@@ -65,6 +67,8 @@ export function loadConfig(): Config {
       appId: readEnv('META_APP_ID'),
       appSecret: readEnv('META_APP_SECRET'),
       verifyToken: readEnv('META_VERIFY_TOKEN'),
+      pageAccessToken: readEnv('META_PAGE_ACCESS_TOKEN'),
+      pageId: readEnv('META_PAGE_ID'),
     },
     waba: {
       phoneNumberId: readEnv('META_WABA_PHONE_NUMBER_ID'),
