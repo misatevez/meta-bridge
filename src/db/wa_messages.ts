@@ -3,6 +3,8 @@ import type { Pool, ResultSetHeader } from 'mysql2/promise';
 export interface IncomingMessage {
   wamid: string;
   waId: string;
+  channel?: 'whatsapp' | 'messenger';
+  senderPsid?: string | null;
   body: string | null;
   raw: unknown;
 }
@@ -16,8 +18,8 @@ export function createMessageStore(pool: Pool): MessageStore {
   return {
     async insertIncomingMessage(msg) {
       const [result] = await pool.execute<ResultSetHeader>(
-        'INSERT IGNORE INTO `wa_messages` (`wamid`, `direction`, `wa_id`, `body`, `raw_payload`) VALUES (?, ?, ?, ?, ?)',
-        [msg.wamid, 'in', msg.waId, msg.body, JSON.stringify(msg.raw)],
+        'INSERT IGNORE INTO `wa_messages` (`wamid`, `direction`, `wa_id`, `channel`, `sender_psid`, `body`, `raw_payload`) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [msg.wamid, 'in', msg.waId, msg.channel || 'whatsapp', msg.senderPsid || null, msg.body, JSON.stringify(msg.raw)],
       );
       return { inserted: result.affectedRows > 0 };
     },
