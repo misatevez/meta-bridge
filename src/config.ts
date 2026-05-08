@@ -30,6 +30,13 @@ export interface Config {
     password: string;
     database: string;
   };
+  firmascrm: {
+    host: string;
+    port: number;
+    user: string;
+    password: string;
+    database: string;
+  };
 }
 
 function readEnv(key: string, fallback?: string): string {
@@ -78,6 +85,13 @@ export function loadConfig(): Config {
       user: readEnv('DB_USER'),
       password: readEnv('DB_PASS'),
       database: readEnv('DB_NAME', 'meta_bridge'),
+    },
+    firmascrm: {
+      host: readEnv('FIRMASCRM_DB_HOST', readEnv('DB_HOST', '127.0.0.1')),
+      port: readEnvInt('FIRMASCRM_DB_PORT', readEnvInt('DB_PORT', 3306)),
+      user: readEnv('FIRMASCRM_DB_USER', 'meta_bridge'),
+      password: readEnv('FIRMASCRM_DB_PASS'),
+      database: readEnv('FIRMASCRM_DB_NAME', 'firmascrm'),
     },
   };
 }

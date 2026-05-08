@@ -4,16 +4,35 @@ import { config } from '../config.js';
 import type { IncomingMessage, MessageStore } from '../db/wa_messages.js';
 import { logger } from '../logger.js';
 import type { ContactMapper } from '../services/contact-mapper.js';
+import type { SuiteCrmSyncService } from '../services/suitecrm-sync.js';
 
 interface ParsedMessage {
   wamid: string;
   waId: string;
   body: string | null;
   raw: unknown;
+  timestamp: number;
+  messageType: string;
+  profileName: string;
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null;
+}
+
+function extractProfileName(value: Record<string, unknown>, waId: string): string {
+  const contacts = value.contacts;
+  if (!Array.isArray(contacts)) return waId;
+  for (const c of contacts) {
+    const contact = asObject(c);
+    if (!contact) continue;
+    if (contact.wa_id !== waId) continue;
+    const profile = asObject(contact.profile);
+    if (profile && typeof profile.name === 'string' && profile.name.length > 0) {
+      return profile.name;
+    }
+  }
+  return waId;
 }
 
 export function parseIncomingMessages(payload: unknown): ParsedMessage[] {
@@ -41,13 +60,21 @@ export function parseIncomingMessages(payload: unknown): ParsedMessage[] {
         const id = msg.id;
         if (typeof id !== 'string' || id === '') continue;
         const from = msg.from;
+        const waId = typeof from === 'string' ? from : '';
         const text = asObject(msg.text);
         const body = text && typeof text.body === 'string' ? text.body : null;
+        const rawTs = msg.timestamp;
+        const timestamp = typeof rawTs === 'string' ? Number.parseInt(rawTs, 10) : typeof rawTs === 'number' ? rawTs : Math.floor(Date.now() / 1000);
+        const messageType = typeof msg.type === 'string' ? msg.type : 'text';
+        const profileName = extractProfileName(value, waId);
         out.push({
           wamid: id,
-          waId: typeof from === 'string' ? from : '',
+          waId,
           body,
           raw: msg,
+          timestamp,
+          messageType,
+          profileName,
         });
       }
     }
@@ -76,7 +103,7 @@ export function webhookGet(req: Request, res: Response): void {
   res.status(403).send('Forbidden');
 }
 
-export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapper) {
+export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapper, syncService?: SuiteCrmSyncService) {
   return async function webhookPost(req: Request, res: Response): Promise<void> {
     const header = req.header('X-Hub-Signature-256');
     if (!header || !header.startsWith('sha256=')) {
@@ -121,14 +148,17 @@ export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapp
         body: m.body,
         raw: m.raw,
       };
+      let inserted = false;
+      let contactId: string | null = null;
       try {
         const result = await store.insertIncomingMessage(incoming);
-        if (!result.inserted) {
+        inserted = result.inserted;
+        if (!inserted) {
           reqLog.info({ wamid: m.wamid }, 'duplicate webhook, skipping');
         } else {
           reqLog.info({ wamid: m.wamid, wa_id: m.waId }, 'webhook message stored');
           if (contactMapper && m.waId) {
-            const contactId = await contactMapper.resolve(m.waId);
+            contactId = await contactMapper.resolve(m.waId);
             if (contactId !== null) {
               await store.updateContactId(m.wamid, contactId);
               reqLog.info({ wamid: m.wamid, contactId }, 'contact mapped');
@@ -138,13 +168,27 @@ export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapp
       } catch (err) {
         reqLog.error({ err, wamid: m.wamid }, 'failed to persist webhook message');
       }
+
+      if (inserted && syncService) {
+        void syncService.syncMessage({
+          waId: m.waId,
+          wamid: m.wamid,
+          body: m.body,
+          timestamp: m.timestamp,
+          messageType: m.messageType,
+          direction: 'in',
+          profileName: m.profileName,
+          contactIdSuitecrm: contactId,
+          phoneNumberId: config.waba.phoneNumberId,
+        });
+      }
     }
 
     res.status(200).send('OK');
   };
 }
 
-export function registerWebhookRoutes(app: Express, store: MessageStore, contactMapper?: ContactMapper): void {
-  app.post('/webhook', express.raw({ type: 'application/json' }), makeWebhookPost(store, contactMapper));
+export function registerWebhookRoutes(app: Express, store: MessageStore, contactMapper?: ContactMapper, syncService?: SuiteCrmSyncService): void {
+  app.post('/webhook', express.raw({ type: 'application/json' }), makeWebhookPost(store, contactMapper, syncService));
   app.get('/webhook', webhookGet);
 }

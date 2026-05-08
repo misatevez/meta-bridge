@@ -5,6 +5,7 @@ import { logger } from './logger.js';
 import { createMessageStore } from './db/wa_messages.js';
 import { SuiteCrmClient } from './services/suitecrm.js';
 import { ContactMapper } from './services/contact-mapper.js';
+import { createSuiteCrmSyncService } from './services/suitecrm-sync.js';
 import type { CheckStatus, HealthChecks } from './services/health.js';
 
 const pool = mysql.createPool({
@@ -22,6 +23,23 @@ const pool = mysql.createPool({
   waitForConnections: true,
   queueLimit: 10,
 });
+
+const firmasCrmPool = mysql.createPool({
+  host: config.firmascrm.host,
+  port: config.firmascrm.port,
+  user: config.firmascrm.user,
+  password: config.firmascrm.password,
+  database: config.firmascrm.database,
+  connectionLimit: 3,
+  timezone: 'Z',
+  connectTimeout: 10000,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
+  waitForConnections: true,
+  queueLimit: 5,
+});
+
+const suiteCrmSync = createSuiteCrmSyncService(firmasCrmPool);
 
 const suitecrm = new SuiteCrmClient(
   config.suitecrm.baseUrl,
@@ -59,6 +77,7 @@ const app = createApp({
   messageStore: createMessageStore(pool),
   healthChecks,
   contactMapper,
+  suiteCrmSync,
 });
 
 const server = app.listen(config.port, config.host, () => {
@@ -70,12 +89,11 @@ const server = app.listen(config.port, config.host, () => {
 
 function shutdown(signal: string): void {
   logger.info({ signal }, 'shutting down');
-  server.close(async (err) => {
-    try {
-      await pool.end();
-    } catch (poolErr) {
-      logger.warn({ err: poolErr }, 'error closing db pool');
-    }
+  server.close(async (err: Error | undefined) => {
+    await Promise.all([
+      pool.end().catch((e: unknown) => logger.warn({ err: e }, 'error closing meta_bridge pool')),
+      firmasCrmPool.end().catch((e: unknown) => logger.warn({ err: e }, 'error closing firmascrm pool')),
+    ]);
     if (err) {
       logger.error({ err }, 'error during shutdown');
       process.exit(1);
