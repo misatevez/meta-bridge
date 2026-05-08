@@ -3,6 +3,7 @@ import express, { type Express, type Request, type Response } from 'express';
 import { config } from '../config.js';
 import type { IncomingMessage, MessageStore } from '../db/wa_messages.js';
 import { logger } from '../logger.js';
+import type { ContactMapper } from '../services/contact-mapper.js';
 import type { SuiteCrmSyncService } from '../services/suitecrm-sync.js';
 
 interface ParsedMessage {
@@ -102,7 +103,7 @@ export function webhookGet(req: Request, res: Response): void {
   res.status(403).send('Forbidden');
 }
 
-export function makeWebhookPost(store: MessageStore, syncService?: SuiteCrmSyncService) {
+export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapper, syncService?: SuiteCrmSyncService) {
   return async function webhookPost(req: Request, res: Response): Promise<void> {
     const header = req.header('X-Hub-Signature-256');
     if (!header || !header.startsWith('sha256=')) {
@@ -148,6 +149,7 @@ export function makeWebhookPost(store: MessageStore, syncService?: SuiteCrmSyncS
         raw: m.raw,
       };
       let inserted = false;
+      let contactId: string | null = null;
       try {
         const result = await store.insertIncomingMessage(incoming);
         inserted = result.inserted;
@@ -155,6 +157,13 @@ export function makeWebhookPost(store: MessageStore, syncService?: SuiteCrmSyncS
           reqLog.info({ wamid: m.wamid }, 'duplicate webhook, skipping');
         } else {
           reqLog.info({ wamid: m.wamid, wa_id: m.waId }, 'webhook message stored');
+          if (contactMapper && m.waId) {
+            contactId = await contactMapper.resolve(m.waId);
+            if (contactId !== null) {
+              await store.updateContactId(m.wamid, contactId);
+              reqLog.info({ wamid: m.wamid, contactId }, 'contact mapped');
+            }
+          }
         }
       } catch (err) {
         reqLog.error({ err, wamid: m.wamid }, 'failed to persist webhook message');
@@ -169,7 +178,7 @@ export function makeWebhookPost(store: MessageStore, syncService?: SuiteCrmSyncS
           messageType: m.messageType,
           direction: 'in',
           profileName: m.profileName,
-          contactIdSuitecrm: null,
+          contactIdSuitecrm: contactId,
           phoneNumberId: config.waba.phoneNumberId,
         });
       }
@@ -179,7 +188,7 @@ export function makeWebhookPost(store: MessageStore, syncService?: SuiteCrmSyncS
   };
 }
 
-export function registerWebhookRoutes(app: Express, store: MessageStore, syncService?: SuiteCrmSyncService): void {
-  app.post('/webhook', express.raw({ type: 'application/json' }), makeWebhookPost(store, syncService));
+export function registerWebhookRoutes(app: Express, store: MessageStore, contactMapper?: ContactMapper, syncService?: SuiteCrmSyncService): void {
+  app.post('/webhook', express.raw({ type: 'application/json' }), makeWebhookPost(store, contactMapper, syncService));
   app.get('/webhook', webhookGet);
 }

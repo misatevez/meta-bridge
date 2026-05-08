@@ -9,6 +9,7 @@ export interface IncomingMessage {
 
 export interface MessageStore {
   insertIncomingMessage(msg: IncomingMessage): Promise<{ inserted: boolean }>;
+  updateContactId(wamid: string, contactId: string): Promise<void>;
 }
 
 export function createMessageStore(pool: Pool): MessageStore {
@@ -19,6 +20,12 @@ export function createMessageStore(pool: Pool): MessageStore {
         [msg.wamid, 'in', msg.waId, msg.body, JSON.stringify(msg.raw)],
       );
       return { inserted: result.affectedRows > 0 };
+    },
+    async updateContactId(wamid, contactId) {
+      await pool.execute(
+        'UPDATE `wa_messages` SET `contact_id_suitecrm` = ? WHERE `wamid` = ?',
+        [contactId, wamid],
+      );
     },
   };
 }

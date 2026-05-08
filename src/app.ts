@@ -9,10 +9,14 @@ import { registerWhatsAppRoutes } from './routes/whatsapp.js';
 import type { MessageStore } from './db/wa_messages.js';
 import { evaluateHealth, type HealthChecks } from './services/health.js';
 import type { SuiteCrmSyncService } from './services/suitecrm-sync.js';
+import type { ContactMapper } from './services/contact-mapper.js';
 
 const NOOP_STORE: MessageStore = {
   async insertIncomingMessage() {
     return { inserted: true };
+  },
+  async updateContactId() {
+    // no-op in tests
   },
 };
 
@@ -29,6 +33,7 @@ export interface AppDeps {
   messageStore?: MessageStore;
   healthChecks?: HealthChecks;
   suiteCrmSync?: SuiteCrmSyncService;
+  contactMapper?: ContactMapper;
   webhookRateLimitMax?: number;
   webhookRateLimitWindowMs?: number;
 }
@@ -41,6 +46,7 @@ export function createApp(deps: AppDeps = {}): Express {
   const messageStore = deps.messageStore ?? NOOP_STORE;
   const healthChecks = deps.healthChecks ?? NOOP_HEALTH;
   const suiteCrmSync = deps.suiteCrmSync;
+  const { contactMapper } = deps;
   const rateLimitMax = deps.webhookRateLimitMax ?? DEFAULT_WEBHOOK_RATE_LIMIT_MAX;
   const rateLimitWindow = deps.webhookRateLimitWindowMs ?? DEFAULT_WEBHOOK_RATE_LIMIT_WINDOW_MS;
 
@@ -76,7 +82,7 @@ export function createApp(deps: AppDeps = {}): Express {
   // Webhook routes mount their own raw-body parser scoped to POST /webhook so
   // HMAC can be verified over the unparsed payload. Must be registered before
   // the global express.json() so the JSON parser does not consume the stream.
-  registerWebhookRoutes(app, messageStore, suiteCrmSync);
+  registerWebhookRoutes(app, messageStore, contactMapper, suiteCrmSync);
 
   app.use(express.json({ limit: '1mb' }));
 

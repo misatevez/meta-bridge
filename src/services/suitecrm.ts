@@ -188,9 +188,13 @@ export class SuiteCrmClient {
   }
 
   async findContactByPhone(e164: string): Promise<Contact | null> {
-    const phone = stripPlus(e164);
+    return this.findContactByPhoneField('phone_mobile', e164);
+  }
+
+  async findContactByPhoneField(field: string, phone: string): Promise<Contact | null> {
+    const normalized = stripPlus(phone);
     const params = new URLSearchParams();
-    params.set('filter[phone_mobile][eq]', phone);
+    params.set(`filter[${field}][eq]`, normalized);
     params.set('fields[Contacts]', 'first_name,last_name,phone_mobile,phone_work,email1,name');
     params.set('page[size]', '1');
 
