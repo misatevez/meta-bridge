@@ -6,6 +6,7 @@ import pinoHttp from 'pino-http';
 import { logger } from './logger.js';
 import { registerWebhookRoutes } from './routes/webhook.js';
 import { registerWhatsAppRoutes } from './routes/whatsapp.js';
+import { registerMessengerRoutes } from './routes/messenger.js';
 import type { MessageStore } from './db/wa_messages.js';
 import { evaluateHealth, type HealthChecks } from './services/health.js';
 import type { SuiteCrmSyncService } from './services/suitecrm-sync.js';
@@ -87,6 +88,7 @@ export function createApp(deps: AppDeps = {}): Express {
   app.use(express.json({ limit: '1mb' }));
 
   registerWhatsAppRoutes(app);
+  registerMessengerRoutes(app);
 
   app.get('/health', async (_req: Request, res: Response) => {
     const result = await evaluateHealth(healthChecks);
