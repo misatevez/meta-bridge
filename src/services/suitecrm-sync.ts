@@ -1,6 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import type { Pool } from 'mysql2/promise';
+import type { Pool, RowDataPacket } from 'mysql2/promise';
 import { logger } from '../logger.js';
+
+interface ConversationRow extends RowDataPacket {
+  id: string;
+}
+
+interface ContactRow extends RowDataPacket {
+  contact_id: string;
+}
 
 export interface SyncMessageParams {
   waId: string;
@@ -12,6 +20,7 @@ export interface SyncMessageParams {
   profileName: string;
   contactIdSuitecrm: string | null;
   phoneNumberId: string;
+  channel?: 'whatsapp' | 'messenger';
 }
 
 export interface SuiteCrmSyncService {
@@ -41,20 +50,21 @@ async function doSync(pool: Pool, params: SyncMessageParams): Promise<void> {
     profileName,
     contactIdSuitecrm,
     phoneNumberId,
+    channel = 'whatsapp',
   } = params;
 
   const conn = await pool.getConnection();
   try {
     // Step 1: find existing conversation
-    const [rows] = await conn.execute<Array<{ id: string }>>(
-      "SELECT id FROM meta_conversations WHERE external_thread_id = ? AND channel = 'whatsapp' AND deleted = 0 LIMIT 1",
-      [waId],
+    const [rows] = await conn.execute<ConversationRow[]>(
+      'SELECT id FROM meta_conversations WHERE external_thread_id = ? AND channel = ? AND deleted = 0 LIMIT 1',
+      [waId, channel],
     );
 
     let conversationId: string;
 
     if (rows.length > 0) {
-      conversationId = rows[0].id;
+      conversationId = rows[0]!.id;
     } else {
       // Step 2: create new conversation
       conversationId = randomUUID();
@@ -62,9 +72,10 @@ async function doSync(pool: Pool, params: SyncMessageParams): Promise<void> {
       await conn.execute(
         `INSERT INTO meta_conversations
           (id, channel, channel_id, external_thread_id, contact_id, display_name, status, unread_count, date_entered, date_modified, deleted)
-         VALUES (?, 'whatsapp', ?, ?, ?, ?, 'open', 1, ?, ?, 0)`,
+         VALUES (?, ?, ?, ?, ?, ?, 'open', 1, ?, ?, 0)`,
         [
           conversationId,
+          channel,
           phoneNumberId,
           waId,
           contactIdSuitecrm ?? '',
@@ -112,11 +123,11 @@ async function doSync(pool: Pool, params: SyncMessageParams): Promise<void> {
 
     // Step 5: set contact_id if provided and conversation didn't have one
     if (contactIdSuitecrm && rows.length > 0) {
-      const [existing] = await conn.execute<Array<{ contact_id: string }>>(
+      const [existing] = await conn.execute<ContactRow[]>(
         'SELECT contact_id FROM meta_conversations WHERE id = ? LIMIT 1',
         [conversationId],
       );
-      if (existing.length > 0 && !existing[0].contact_id) {
+      if (existing.length > 0 && !existing[0]!.contact_id) {
         await conn.execute(
           'UPDATE meta_conversations SET contact_id = ?, date_modified = NOW() WHERE id = ?',
           [contactIdSuitecrm, conversationId],

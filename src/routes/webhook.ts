@@ -14,6 +14,7 @@ interface ParsedMessage {
   timestamp: number;
   messageType: string;
   profileName: string;
+  channel: 'whatsapp' | 'messenger';
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -35,7 +36,7 @@ function extractProfileName(value: Record<string, unknown>, waId: string): strin
   return waId;
 }
 
-export function parseIncomingMessages(payload: unknown): ParsedMessage[] {
+function parseWhatsAppMessages(payload: unknown): ParsedMessage[] {
   const root = asObject(payload);
   if (!root) return [];
   const entries = root.entry;
@@ -75,11 +76,100 @@ export function parseIncomingMessages(payload: unknown): ParsedMessage[] {
           timestamp,
           messageType,
           profileName,
+          channel: 'whatsapp',
         });
       }
     }
   }
   return out;
+}
+
+function parseMessengerMessages(payload: unknown): ParsedMessage[] {
+  const root = asObject(payload);
+  if (!root) return [];
+  const entries = root.entry;
+  if (!Array.isArray(entries)) return [];
+
+  const out: ParsedMessage[] = [];
+  for (const entry of entries) {
+    const e = asObject(entry);
+    if (!e) continue;
+    const messaging = e.messaging;
+    if (!Array.isArray(messaging)) continue;
+    for (const item of messaging) {
+      const m = asObject(item);
+      if (!m) continue;
+
+      const sender = asObject(m.sender);
+      const psid = sender && typeof sender.id === 'string' ? sender.id : '';
+      if (!psid) continue;
+
+      const rawTs = m.timestamp;
+      const timestamp = typeof rawTs === 'number' ? Math.floor(rawTs / 1000) : Math.floor(Date.now() / 1000);
+
+      // delivery receipts — log and skip
+      if (m.delivery) {
+        logger.debug({ psid }, 'messenger: delivery receipt, skipping');
+        continue;
+      }
+
+      // read receipts — log and skip
+      if (m.read) {
+        logger.debug({ psid }, 'messenger: read receipt, skipping');
+        continue;
+      }
+
+      // postback
+      if (m.postback) {
+        const pb = asObject(m.postback);
+        const pbPayload = pb && typeof pb.payload === 'string' ? pb.payload : '';
+        const pbTitle = pb && typeof pb.title === 'string' ? pb.title : '';
+        const mid = `pb_${psid}_${timestamp}`;
+        out.push({
+          wamid: mid,
+          waId: psid,
+          body: pbTitle || pbPayload || null,
+          raw: m,
+          timestamp,
+          messageType: 'messenger_postback',
+          profileName: psid,
+          channel: 'messenger',
+        });
+        continue;
+      }
+
+      // text / attachment messages
+      if (m.message) {
+        const msg = asObject(m.message);
+        if (!msg) continue;
+        const mid = typeof msg.mid === 'string' && msg.mid ? msg.mid : `msg_${psid}_${timestamp}`;
+        const body = typeof msg.text === 'string' ? msg.text : null;
+        out.push({
+          wamid: mid,
+          waId: psid,
+          body,
+          raw: m,
+          timestamp,
+          messageType: 'messenger_text',
+          profileName: psid,
+          channel: 'messenger',
+        });
+      }
+    }
+  }
+  return out;
+}
+
+export function parseIncomingMessages(payload: unknown): ParsedMessage[] {
+  const root = asObject(payload);
+  if (!root) return [];
+
+  if (root.object === 'page') {
+    return parseMessengerMessages(payload);
+  }
+
+  // default: whatsapp_business_account
+  return parseWhatsAppMessages(payload);
 }
 
 export function webhookGet(req: Request, res: Response): void {
@@ -179,7 +269,8 @@ export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapp
           direction: 'in',
           profileName: m.profileName,
           contactIdSuitecrm: contactId,
-          phoneNumberId: config.waba.phoneNumberId,
+          phoneNumberId: m.channel === 'messenger' ? config.meta.pageId : config.waba.phoneNumberId,
+          channel: m.channel,
         });
       }
     }
