@@ -39,7 +39,7 @@ const firmasCrmPool = mysql.createPool({
   queueLimit: 5,
 });
 
-const suiteCrmSync = createSuiteCrmSyncService(firmasCrmPool);
+const suiteCrmSync = createSuiteCrmSyncService(firmasCrmPool, config.meta.pageAccessToken);
 
 const suitecrm = new SuiteCrmClient(
   config.suitecrm.baseUrl,
