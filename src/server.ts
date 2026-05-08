@@ -4,6 +4,7 @@ import { config } from './config.js';
 import { logger } from './logger.js';
 import { createMessageStore } from './db/wa_messages.js';
 import { SuiteCrmClient } from './services/suitecrm.js';
+import { ContactMapper } from './services/contact-mapper.js';
 import type { CheckStatus, HealthChecks } from './services/health.js';
 
 const pool = mysql.createPool({
@@ -52,9 +53,12 @@ const healthChecks: HealthChecks = {
   },
 };
 
+const contactMapper = new ContactMapper(pool, suitecrm);
+
 const app = createApp({
   messageStore: createMessageStore(pool),
   healthChecks,
+  contactMapper,
 });
 
 const server = app.listen(config.port, config.host, () => {
