@@ -15,7 +15,7 @@ interface ParsedMessage {
   timestamp: number;
   messageType: string;
   profileName: string;
-  channel: 'whatsapp' | 'messenger';
+  channel: 'whatsapp' | 'messenger' | 'instagram';
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -85,7 +85,7 @@ function parseWhatsAppMessages(payload: unknown): ParsedMessage[] {
   return out;
 }
 
-function parseMessengerMessages(payload: unknown): ParsedMessage[] {
+function parseMessengerMessages(payload: unknown, channel: 'messenger' | 'instagram' = 'messenger'): ParsedMessage[] {
   const root = asObject(payload);
   if (!root) return [];
   const entries = root.entry;
@@ -110,13 +110,13 @@ function parseMessengerMessages(payload: unknown): ParsedMessage[] {
 
       // delivery receipts — log and skip
       if (m.delivery) {
-        logger.debug({ psid }, 'messenger: delivery receipt, skipping');
+        logger.debug({ psid, channel }, `${channel}: delivery receipt, skipping`);
         continue;
       }
 
       // read receipts — log and skip
       if (m.read) {
-        logger.debug({ psid }, 'messenger: read receipt, skipping');
+        logger.debug({ psid, channel }, `${channel}: read receipt, skipping`);
         continue;
       }
 
@@ -133,9 +133,9 @@ function parseMessengerMessages(payload: unknown): ParsedMessage[] {
           body: pbTitle || pbPayload || null,
           raw: m,
           timestamp,
-          messageType: 'messenger_postback',
+          messageType: `${channel}_postback`,
           profileName: psid,
-          channel: 'messenger',
+          channel,
         });
         continue;
       }
@@ -153,9 +153,9 @@ function parseMessengerMessages(payload: unknown): ParsedMessage[] {
           body,
           raw: m,
           timestamp,
-          messageType: 'messenger_text',
+          messageType: `${channel}_text`,
           profileName: psid,
-          channel: 'messenger',
+          channel,
         });
       }
     }
@@ -168,7 +168,11 @@ export function parseIncomingMessages(payload: unknown): ParsedMessage[] {
   if (!root) return [];
 
   if (root.object === 'page') {
-    return parseMessengerMessages(payload);
+    return parseMessengerMessages(payload, 'messenger');
+  }
+
+  if (root.object === 'instagram') {
+    return parseMessengerMessages(payload, 'instagram');
   }
 
   // default: whatsapp_business_account
@@ -274,7 +278,7 @@ export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapp
           direction: 'in',
           profileName: m.profileName,
           contactIdSuitecrm: contactId,
-          phoneNumberId: m.channel === 'messenger' ? config.meta.pageId : config.waba.phoneNumberId,
+          phoneNumberId: (m.channel === 'messenger' || m.channel === 'instagram') ? config.meta.pageId : config.waba.phoneNumberId,
           channel: m.channel,
         });
       }
