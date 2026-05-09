@@ -257,7 +257,10 @@ export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapp
         } else {
           reqLog.info({ wamid: m.wamid, wa_id: m.waId }, 'webhook message stored');
           if (contactMapper && m.waId) {
-            contactId = await contactMapper.resolve(m.waId);
+            contactId = await contactMapper.resolve(m.waId, {
+              profileName: m.profileName,
+              channel: m.channel,
+            });
             if (contactId !== null) {
               await store.updateContactId(m.wamid, contactId);
               reqLog.info({ wamid: m.wamid, contactId }, 'contact mapped');

@@ -1,8 +1,13 @@
 import type { Pool, RowDataPacket } from 'mysql2/promise';
-import type { SuiteCrmClient } from './suitecrm.js';
+import type { CreateContactInput, SuiteCrmClient } from './suitecrm.js';
 import { logger } from '../logger.js';
 
 const PHONE_FIELDS = ['phone_mobile', 'phone_work', 'phone_home', 'phone_other'] as const;
+
+export interface ResolveOptions {
+  profileName?: string;
+  channel?: 'whatsapp' | 'messenger' | 'instagram';
+}
 
 export class ContactMapper {
   constructor(
@@ -10,7 +15,7 @@ export class ContactMapper {
     private readonly suitecrm: SuiteCrmClient,
   ) {}
 
-  async resolve(waId: string): Promise<string | null> {
+  async resolve(waId: string, options?: ResolveOptions): Promise<string | null> {
     try {
       const cached = await this.getFromCache(waId);
       if (cached !== null) {
@@ -18,16 +23,54 @@ export class ContactMapper {
         return cached;
       }
 
-      const contactId = await this.searchSuiteCrm(waId);
-      if (contactId !== null) {
-        await this.saveToCache(waId, contactId);
-        logger.info({ waId, contactId }, 'contact-mapper: contact found and cached');
+      // Only search by phone for WhatsApp (psid/igsid are not phone numbers)
+      const channel = options?.channel ?? 'whatsapp';
+      let contactId: string | null = null;
+      if (channel === 'whatsapp') {
+        contactId = await this.searchSuiteCrm(waId);
+        if (contactId !== null) {
+          await this.saveToCache(waId, contactId);
+          logger.info({ waId, contactId }, 'contact-mapper: contact found and cached');
+          return contactId;
+        }
+      }
+
+      if (options !== undefined) {
+        contactId = await this.autoCreateContact(waId, options);
+        if (contactId !== null) {
+          await this.saveToCache(waId, contactId);
+        }
       } else {
         logger.info({ waId }, 'contact-mapper: no contact found');
       }
       return contactId;
     } catch (err) {
       logger.warn({ err, waId }, 'contact-mapper: error resolving contact, continuing');
+      return null;
+    }
+  }
+
+  private async autoCreateContact(waId: string, options: ResolveOptions): Promise<string | null> {
+    try {
+      const channel = options.channel ?? 'whatsapp';
+      const profileName = options.profileName && options.profileName !== waId ? options.profileName : waId;
+      const date = new Date().toISOString().split('T')[0];
+      const description = `Auto-creado desde ${channel} el ${date}`;
+
+      const input: CreateContactInput = {
+        firstName: profileName,
+        description,
+      };
+
+      if (channel === 'whatsapp') {
+        input.phoneMobile = waId.startsWith('+') ? waId.slice(1) : waId;
+      }
+
+      const contact = await this.suitecrm.createContact(input);
+      logger.info({ waId, contactId: contact.id, channel }, 'contact-mapper: auto-created contact in SuiteCRM');
+      return contact.id;
+    } catch (err) {
+      logger.warn({ err, waId }, 'contact-mapper: failed to auto-create contact, continuing without');
       return null;
     }
   }
