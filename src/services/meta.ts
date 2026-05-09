@@ -12,6 +12,7 @@ export interface WaTemplate {
   name: string;
   language: string;
   status: string;
+  category?: string;
   components: WaTemplateComponent[];
 }
 
@@ -40,7 +41,11 @@ export async function fetchTemplates(wabaId: string, accessToken: string): Promi
   const res = await axios.get<{ data?: unknown[] }>(
     `${META_GRAPH_BASE}/${wabaId}/message_templates`,
     {
-      params: { access_token: accessToken, limit: 200 },
+      params: {
+        access_token: accessToken,
+        fields: 'name,language,status,components,category',
+        limit: 200,
+      },
       timeout: 10_000,
       validateStatus: () => true,
     },

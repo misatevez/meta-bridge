@@ -40,6 +40,33 @@ export function registerWhatsAppRoutes(app: Express): void {
     }
   });
 
+  app.get('/api/whatsapp/templates', requireBridgeKey, async (req: Request, res: Response) => {
+    const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
+    const { id: wabaId, accessToken } = config.waba;
+
+    if (!wabaId || !accessToken) {
+      reqLog.info('WABA not configured — returning empty templates');
+      res.json({ templates: [], connected: false });
+      return;
+    }
+
+    try {
+      const allTemplates = await fetchTemplates(wabaId, accessToken);
+      const templates = allTemplates
+        .filter((t) => t.status === 'APPROVED')
+        .map((t) => ({
+          name: t.name,
+          language: t.language,
+          category: t.category,
+          components: t.components,
+        }));
+      res.json({ templates, connected: true });
+    } catch (err) {
+      reqLog.error({ err }, 'failed to fetch Meta templates');
+      res.status(502).json({ error: 'failed_to_fetch_templates' });
+    }
+  });
+
   app.post('/messages/whatsapp', requireBridgeKey, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
 
