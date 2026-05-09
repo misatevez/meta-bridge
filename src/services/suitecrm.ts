@@ -36,6 +36,12 @@ export interface CreateLeadInput {
   source: string;
 }
 
+export interface CreateContactInput {
+  firstName: string;
+  phoneMobile?: string;
+  description?: string;
+}
+
 export type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
 
 export class SuiteCrmApiError extends Error {
@@ -206,6 +212,25 @@ export class SuiteCrmClient {
     const first = res.data?.[0];
     if (!first) return null;
     return mapContact(first);
+  }
+
+  async createContact(input: CreateContactInput): Promise<Contact> {
+    const attrs: Record<string, string> = {
+      first_name: input.firstName,
+      last_name: '',
+    };
+    if (input.phoneMobile) attrs.phone_mobile = input.phoneMobile;
+    if (input.description) attrs.description = input.description;
+
+    const body = {
+      data: {
+        type: 'Contacts',
+        attributes: attrs,
+      },
+    };
+
+    const res = await this.request<JsonApiSingleResponse>('POST', MODULE_PATH, body);
+    return mapContact(res.data);
   }
 
   async createLead(input: CreateLeadInput): Promise<Lead> {
