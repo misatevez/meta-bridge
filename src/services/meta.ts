@@ -102,6 +102,41 @@ export async function sendTemplateMessage(
   return { wamid, status: 'pending' };
 }
 
+export async function sendTextMessage(
+  phoneNumberId: string,
+  accessToken: string,
+  to: string,
+  text: string,
+): Promise<{ wamid: string }> {
+  const body = {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'text',
+    text: { body: text },
+  };
+
+  const res = await axios.post<{ messages?: Array<{ id?: string }> }>(
+    `${META_GRAPH_BASE}/${phoneNumberId}/messages`,
+    body,
+    {
+      params: { access_token: accessToken },
+      timeout: 15_000,
+      validateStatus: () => true,
+    },
+  );
+
+  if (res.status < 200 || res.status >= 300) {
+    const data = res.data as { error?: { code?: number; message?: string } };
+    if (data?.error?.code === 131047 || data?.error?.code === 130472) {
+      throw Object.assign(new Error('outside_24h_window'), { code: 'outside_24h_window' });
+    }
+    throw new Error(`Meta messages API error ${res.status}: ${JSON.stringify(res.data)}`);
+  }
+
+  const wamid = res.data.messages?.[0]?.id ?? `local-${Date.now()}`;
+  return { wamid };
+}
+
 export async function sendTemplateRaw(
   phoneNumberId: string,
   accessToken: string,

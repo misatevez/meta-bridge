@@ -8,10 +8,12 @@ import { registerWebhookRoutes } from './routes/webhook.js';
 import { registerWhatsAppRoutes } from './routes/whatsapp.js';
 import { registerMessengerRoutes } from './routes/messenger.js';
 import { registerInstagramRoutes } from './routes/instagram.js';
+import { registerSendRoutes } from './routes/send.js';
 import type { MessageStore } from './db/wa_messages.js';
 import { evaluateHealth, type HealthChecks } from './services/health.js';
 import type { SuiteCrmSyncService } from './services/suitecrm-sync.js';
 import type { ContactMapper } from './services/contact-mapper.js';
+import type { Pool } from 'mysql2/promise';
 
 const NOOP_STORE: MessageStore = {
   async insertIncomingMessage() {
@@ -36,6 +38,7 @@ export interface AppDeps {
   healthChecks?: HealthChecks;
   suiteCrmSync?: SuiteCrmSyncService;
   contactMapper?: ContactMapper;
+  firmasCrmPool?: Pool;
   webhookRateLimitMax?: number;
   webhookRateLimitWindowMs?: number;
 }
@@ -48,7 +51,7 @@ export function createApp(deps: AppDeps = {}): Express {
   const messageStore = deps.messageStore ?? NOOP_STORE;
   const healthChecks = deps.healthChecks ?? NOOP_HEALTH;
   const suiteCrmSync = deps.suiteCrmSync;
-  const { contactMapper } = deps;
+  const { contactMapper, firmasCrmPool } = deps;
   const rateLimitMax = deps.webhookRateLimitMax ?? DEFAULT_WEBHOOK_RATE_LIMIT_MAX;
   const rateLimitWindow = deps.webhookRateLimitWindowMs ?? DEFAULT_WEBHOOK_RATE_LIMIT_WINDOW_MS;
 
@@ -57,6 +60,17 @@ export function createApp(deps: AppDeps = {}): Express {
   app.set('trust proxy', 1);
 
   app.use(helmet());
+
+  app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', 'https://firmas.moacrm.com');
+    res.header('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+    if (req.method === 'OPTIONS') {
+      res.sendStatus(204);
+      return;
+    }
+    next();
+  });
 
   app.use(
     pinoHttp({
@@ -91,6 +105,9 @@ export function createApp(deps: AppDeps = {}): Express {
   registerWhatsAppRoutes(app);
   registerMessengerRoutes(app);
   registerInstagramRoutes(app);
+  if (firmasCrmPool) {
+    registerSendRoutes(app, firmasCrmPool);
+  }
 
   app.get('/health', async (_req: Request, res: Response) => {
     const result = await evaluateHealth(healthChecks);
