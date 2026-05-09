@@ -20,7 +20,7 @@ export interface SyncMessageParams {
   profileName: string;
   contactIdSuitecrm: string | null;
   phoneNumberId: string;
-  channel?: 'whatsapp' | 'messenger';
+  channel?: 'whatsapp' | 'messenger' | 'instagram';
 }
 
 export interface SuiteCrmSyncService {
@@ -78,8 +78,8 @@ async function doSync(pool: Pool, params: SyncMessageParams, pageAccessToken: st
     channel = 'whatsapp',
   } = params;
 
-  // For Messenger, resolve display_name via Graph API; for WhatsApp use profileName as-is
-  const displayName = channel === 'messenger'
+  // For Messenger/Instagram, resolve display_name via Graph API; for WhatsApp use profileName as-is
+  const displayName = (channel === 'messenger' || channel === 'instagram')
     ? await resolveMessengerDisplayName(waId, pageAccessToken, messengerContactsMap)
     : (profileName || waId);
 
