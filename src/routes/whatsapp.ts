@@ -2,7 +2,7 @@ import type { Express, Request, Response } from 'express';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { requireBridgeKey } from '../middleware/auth.js';
-import { fetchTemplates, sendTemplateMessage, sendTemplateRaw } from '../services/meta.js';
+import { fetchTemplates, sendTemplateMessage, sendTemplateRaw, sendTextMessage } from '../services/meta.js';
 import type { SendMessageInput, WaTemplate } from '../services/meta.js';
 
 const MOCK_TEMPLATES: WaTemplate[] = [
@@ -127,6 +127,54 @@ export function registerWhatsAppRoutes(app: Express): void {
     } catch (err) {
       reqLog.error({ err, to: input.to, template: input.templateName }, 'failed to send WhatsApp');
       res.status(502).json({ error: 'send_failed' });
+    }
+  });
+
+  app.post('/api/whatsapp/send', requireBridgeKey, async (req: Request, res: Response) => {
+    const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
+
+    const body = req.body as { to?: unknown; text?: unknown };
+
+    if (typeof body.to !== 'string' || !body.to.trim()) {
+      res.status(400).json({ success: false, error: 'missing_required_fields', required: ['to', 'text'] });
+      return;
+    }
+    if (typeof body.text !== 'string' || !body.text.trim()) {
+      res.status(400).json({ success: false, error: 'missing_required_fields', required: ['to', 'text'] });
+      return;
+    }
+
+    const to = body.to.trim();
+    const text = body.text.trim();
+    const { phoneNumberId, accessToken } = config.waba;
+
+    if (!phoneNumberId || !accessToken) {
+      reqLog.info({ to }, 'WABA not configured — free-text message queued (no-op)');
+      res.status(202).json({
+        success: true,
+        wamid: `queued-${Date.now()}`,
+        status: 'queued',
+        note: 'WABA channel not connected.',
+      });
+      return;
+    }
+
+    try {
+      const result = await sendTextMessage(phoneNumberId, accessToken, to, text);
+      reqLog.info({ wamid: result.wamid, to }, 'WhatsApp free-text message sent');
+      res.status(202).json({ success: true, wamid: result.wamid });
+    } catch (err) {
+      const e = err as { code?: string };
+      if (e.code === 'outside_24h_window') {
+        res.status(422).json({
+          success: false,
+          error: 'outside_24h_window',
+          hint: 'Use /api/whatsapp/send-template instead',
+        });
+        return;
+      }
+      reqLog.error({ err, to }, 'failed to send WhatsApp free-text');
+      res.status(502).json({ success: false, error: 'send_failed' });
     }
   });
 

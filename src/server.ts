@@ -78,6 +78,7 @@ const app = createApp({
   healthChecks,
   contactMapper,
   suiteCrmSync,
+  firmasCrmPool,
 });
 
 const server = app.listen(config.port, config.host, () => {
