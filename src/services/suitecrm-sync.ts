@@ -20,43 +20,43 @@ export interface SyncMessageParams {
   profileName: string;
   contactIdSuitecrm: string | null;
   phoneNumberId: string;
-  channel?: 'whatsapp' | 'messenger';
+  channel?: 'whatsapp' | 'messenger' | 'instagram';
 }
 
 export interface SuiteCrmSyncService {
   syncMessage(params: SyncMessageParams): Promise<void>;
 }
 
-async function resolveMessengerDisplayName(psid: string, pageAccessToken: string, cache: Map<string, string>): Promise<string> {
-  const cached = cache.get(psid);
+async function resolveGraphAPIDisplayName(id: string, pageAccessToken: string, cache: Map<string, string>): Promise<string> {
+  const cached = cache.get(id);
   if (cached !== undefined) return cached;
 
   try {
-    const url = `https://graph.facebook.com/v19.0/${psid}?fields=name&access_token=${pageAccessToken}`;
+    const url = `https://graph.facebook.com/v19.0/${id}?fields=name&access_token=${pageAccessToken}`;
     const res = await fetch(url);
     if (!res.ok) {
-      logger.warn({ psid, status: res.status }, 'messenger: Graph API name lookup failed, using PSID');
-      cache.set(psid, psid);
-      return psid;
+      logger.warn({ id, status: res.status }, 'Graph API name lookup failed, using ID as fallback');
+      cache.set(id, id);
+      return id;
     }
     const data = await res.json() as Record<string, unknown>;
-    const name = typeof data.name === 'string' && data.name.length > 0 ? data.name : psid;
-    cache.set(psid, name);
+    const name = typeof data.name === 'string' && data.name.length > 0 ? data.name : id;
+    cache.set(id, name);
     return name;
   } catch (err) {
-    logger.warn({ err, psid }, 'messenger: Graph API name lookup error, using PSID');
-    cache.set(psid, psid);
-    return psid;
+    logger.warn({ err, id }, 'Graph API name lookup error, using ID as fallback');
+    cache.set(id, id);
+    return id;
   }
 }
 
 export function createSuiteCrmSyncService(pool: Pool, pageAccessToken = ''): SuiteCrmSyncService {
-  const messengerContactsMap = new Map<string, string>();
+  const socialContactsCache = new Map<string, string>();
 
   return {
     async syncMessage(params) {
       try {
-        await doSync(pool, params, pageAccessToken, messengerContactsMap);
+        await doSync(pool, params, pageAccessToken, socialContactsCache);
       } catch (err) {
         logger.error({ err, wamid: params.wamid, waId: params.waId }, 'suitecrm-sync: failed — not blocking webhook');
       }
@@ -64,7 +64,7 @@ export function createSuiteCrmSyncService(pool: Pool, pageAccessToken = ''): Sui
   };
 }
 
-async function doSync(pool: Pool, params: SyncMessageParams, pageAccessToken: string, messengerContactsMap: Map<string, string>): Promise<void> {
+async function doSync(pool: Pool, params: SyncMessageParams, pageAccessToken: string, socialContactsCache: Map<string, string>): Promise<void> {
   const {
     waId,
     wamid,
@@ -78,9 +78,9 @@ async function doSync(pool: Pool, params: SyncMessageParams, pageAccessToken: st
     channel = 'whatsapp',
   } = params;
 
-  // For Messenger, resolve display_name via Graph API; for WhatsApp use profileName as-is
-  const displayName = channel === 'messenger'
-    ? await resolveMessengerDisplayName(waId, pageAccessToken, messengerContactsMap)
+  // For Messenger and Instagram, resolve display_name via Graph API; for WhatsApp use profileName as-is
+  const displayName = (channel === 'messenger' || channel === 'instagram')
+    ? await resolveGraphAPIDisplayName(waId, pageAccessToken, socialContactsCache)
     : (profileName || waId);
 
   const conn = await pool.getConnection();
