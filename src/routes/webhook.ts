@@ -9,6 +9,7 @@ import type { SuiteCrmSyncService } from '../services/suitecrm-sync.js';
 interface ParsedMessage {
   wamid: string;
   waId: string;
+  senderPsid?: string;
   body: string | null;
   raw: unknown;
   timestamp: number;
@@ -128,6 +129,7 @@ function parseMessengerMessages(payload: unknown): ParsedMessage[] {
         out.push({
           wamid: mid,
           waId: psid,
+          senderPsid: psid,
           body: pbTitle || pbPayload || null,
           raw: m,
           timestamp,
@@ -147,6 +149,7 @@ function parseMessengerMessages(payload: unknown): ParsedMessage[] {
         out.push({
           wamid: mid,
           waId: psid,
+          senderPsid: psid,
           body,
           raw: m,
           timestamp,
@@ -235,6 +238,8 @@ export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapp
       const incoming: IncomingMessage = {
         wamid: m.wamid,
         waId: m.waId,
+        channel: m.channel,
+        senderPsid: m.senderPsid,
         body: m.body,
         raw: m.raw,
       };
