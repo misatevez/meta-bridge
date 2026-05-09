@@ -3,7 +3,7 @@ import type { Pool, ResultSetHeader } from 'mysql2/promise';
 export interface IncomingMessage {
   wamid: string;
   waId: string;
-  channel?: 'whatsapp' | 'messenger';
+  channel?: 'whatsapp' | 'messenger' | 'instagram';
   senderPsid?: string | null;
   body: string | null;
   raw: unknown;
