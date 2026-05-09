@@ -7,6 +7,7 @@ import { logger } from './logger.js';
 import { registerWebhookRoutes } from './routes/webhook.js';
 import { registerWhatsAppRoutes } from './routes/whatsapp.js';
 import { registerMessengerRoutes } from './routes/messenger.js';
+import { registerInstagramRoutes } from './routes/instagram.js';
 import type { MessageStore } from './db/wa_messages.js';
 import { evaluateHealth, type HealthChecks } from './services/health.js';
 import type { SuiteCrmSyncService } from './services/suitecrm-sync.js';
@@ -89,6 +90,7 @@ export function createApp(deps: AppDeps = {}): Express {
 
   registerWhatsAppRoutes(app);
   registerMessengerRoutes(app);
+  registerInstagramRoutes(app);
 
   app.get('/health', async (_req: Request, res: Response) => {
     const result = await evaluateHealth(healthChecks);
