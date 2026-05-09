@@ -2,7 +2,7 @@ import type { Express, Request, Response } from 'express';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { requireBridgeKey } from '../middleware/auth.js';
-import { fetchTemplates, sendTemplateMessage } from '../services/meta.js';
+import { fetchTemplates, sendTemplateMessage, sendTemplateRaw } from '../services/meta.js';
 import type { SendMessageInput, WaTemplate } from '../services/meta.js';
 
 const MOCK_TEMPLATES: WaTemplate[] = [
@@ -100,6 +100,53 @@ export function registerWhatsAppRoutes(app: Express): void {
     } catch (err) {
       reqLog.error({ err, to: input.to, template: input.templateName }, 'failed to send WhatsApp');
       res.status(502).json({ error: 'send_failed' });
+    }
+  });
+
+  app.post('/api/whatsapp/send-template', requireBridgeKey, async (req: Request, res: Response) => {
+    const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
+
+    const body = req.body as {
+      to?: unknown;
+      template_name?: unknown;
+      language?: unknown;
+      components?: unknown;
+    };
+
+    if (typeof body.to !== 'string' || !body.to.trim()) {
+      res.status(400).json({ success: false, error: 'missing_required_fields', required: ['to', 'template_name'] });
+      return;
+    }
+    if (typeof body.template_name !== 'string' || !body.template_name.trim()) {
+      res.status(400).json({ success: false, error: 'missing_required_fields', required: ['to', 'template_name'] });
+      return;
+    }
+
+    const to = body.to.trim();
+    const templateName = body.template_name.trim();
+    const language = typeof body.language === 'string' && body.language ? body.language : 'es';
+    const components = Array.isArray(body.components) ? body.components : [];
+
+    const { phoneNumberId, accessToken } = config.waba;
+
+    if (!phoneNumberId || !accessToken) {
+      reqLog.info({ to, template: templateName }, 'WABA not configured — template queued (no-op)');
+      res.status(202).json({
+        success: true,
+        message_id: `queued-${Date.now()}`,
+        status: 'queued',
+        note: 'WABA channel not connected. Connect via Admin → Meta Bridge.',
+      });
+      return;
+    }
+
+    try {
+      const result = await sendTemplateRaw(phoneNumberId, accessToken, { to, templateName, language, components });
+      reqLog.info({ wamid: result.wamid, to, template: templateName }, 'WhatsApp template sent via send-template');
+      res.status(202).json({ success: true, message_id: result.wamid });
+    } catch (err) {
+      reqLog.error({ err, to, template: templateName }, 'failed to send WhatsApp template');
+      res.status(502).json({ success: false, error: 'send_failed' });
     }
   });
 }

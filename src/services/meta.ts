@@ -29,6 +29,13 @@ export interface SendMessageResult {
   status: 'pending';
 }
 
+export interface SendTemplateRawInput {
+  to: string;
+  templateName: string;
+  language: string;
+  components: unknown[];
+}
+
 export async function fetchTemplates(wabaId: string, accessToken: string): Promise<WaTemplate[]> {
   const res = await axios.get<{ data?: unknown[] }>(
     `${META_GRAPH_BASE}/${wabaId}/message_templates`,
@@ -84,6 +91,40 @@ export async function sendTemplateMessage(
     throw new Error(
       `Meta messages API error ${res.status}: ${JSON.stringify(res.data)}`,
     );
+  }
+
+  const wamid = res.data.messages?.[0]?.id ?? `local-${Date.now()}`;
+  return { wamid, status: 'pending' };
+}
+
+export async function sendTemplateRaw(
+  phoneNumberId: string,
+  accessToken: string,
+  input: SendTemplateRawInput,
+): Promise<SendMessageResult> {
+  const body = {
+    messaging_product: 'whatsapp',
+    to: input.to,
+    type: 'template',
+    template: {
+      name: input.templateName,
+      language: { code: input.language },
+      components: input.components,
+    },
+  };
+
+  const res = await axios.post<{ messages?: Array<{ id?: string }> }>(
+    `${META_GRAPH_BASE}/${phoneNumberId}/messages`,
+    body,
+    {
+      params: { access_token: accessToken },
+      timeout: 15_000,
+      validateStatus: () => true,
+    },
+  );
+
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`Meta messages API error ${res.status}: ${JSON.stringify(res.data)}`);
   }
 
   const wamid = res.data.messages?.[0]?.id ?? `local-${Date.now()}`;
