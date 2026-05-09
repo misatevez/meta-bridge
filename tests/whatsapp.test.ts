@@ -91,3 +91,81 @@ describe('POST /messages/whatsapp', () => {
     expect(res.body).toMatchObject({ status: 'queued' });
   });
 });
+
+describe('POST /api/whatsapp/send-template', () => {
+  it('returns 401 without bearer token', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/whatsapp/send-template')
+      .send({ to: '+5491112345678', template_name: 'hello_world' });
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 401 with wrong bearer token', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/whatsapp/send-template')
+      .set('Authorization', 'Bearer wrong-key')
+      .send({ to: '+5491112345678', template_name: 'hello_world' });
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 400 when to is missing', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/whatsapp/send-template')
+      .set('Authorization', `Bearer ${BRIDGE_API_KEY}`)
+      .send({ template_name: 'hello_world' });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ success: false, error: 'missing_required_fields' });
+  });
+
+  it('returns 400 when template_name is missing', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/whatsapp/send-template')
+      .set('Authorization', `Bearer ${BRIDGE_API_KEY}`)
+      .send({ to: '+5491112345678' });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ success: false, error: 'missing_required_fields' });
+  });
+
+  it('returns 202 queued when WABA not configured (no components)', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/whatsapp/send-template')
+      .set('Authorization', `Bearer ${BRIDGE_API_KEY}`)
+      .send({ to: '+5491112345678', template_name: 'hello_world', language: 'en_US' });
+
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({ success: true, status: 'queued' });
+    expect(typeof res.body.message_id).toBe('string');
+  });
+
+  it('returns 202 queued with components array when WABA not configured', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/whatsapp/send-template')
+      .set('Authorization', `Bearer ${BRIDGE_API_KEY}`)
+      .send({
+        to: '+5491112345678',
+        template_name: 'bienvenida',
+        language: 'es',
+        components: [{ type: 'body', parameters: [{ type: 'text', text: 'Juan' }] }],
+      });
+
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({ success: true, status: 'queued' });
+  });
+
+  it('defaults language to es when not provided', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/whatsapp/send-template')
+      .set('Authorization', `Bearer ${BRIDGE_API_KEY}`)
+      .send({ to: '+5491112345678', template_name: 'hello_world' });
+
+    expect(res.status).toBe(202);
+    expect(res.body.success).toBe(true);
+  });
+});
