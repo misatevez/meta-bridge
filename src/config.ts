@@ -20,6 +20,9 @@ export interface Config {
   bridge: {
     apiKey: string;
   };
+  ws: {
+    jwtSecret: string;
+  };
   suitecrm: {
     baseUrl: string;
     oauthClientId: string;
@@ -77,6 +80,9 @@ export function loadConfig(): Config {
     },
     bridge: {
       apiKey: readEnv('BRIDGE_API_KEY'),
+    },
+    ws: {
+      jwtSecret: readEnv('WS_JWT_SECRET'),
     },
     suitecrm: {
       baseUrl: readEnv('SUITECRM_BASE_URL', 'https://firmas.moacrm.com'),
