@@ -5,6 +5,16 @@ import type { IncomingMessage, MessageStore } from '../db/wa_messages.js';
 import { logger } from '../logger.js';
 import type { ContactMapper } from '../services/contact-mapper.js';
 import type { SuiteCrmSyncService } from '../services/suitecrm-sync.js';
+import type { Server as SocketIOServer } from 'socket.io';
+
+export interface NewMessageEvent {
+  conversation_id: string;
+  message_id: string;
+  channel: 'whatsapp' | 'messenger' | 'instagram';
+  sender: string;
+  text: string | null;
+  timestamp: number;
+}
 
 interface ParsedMessage {
   wamid: string;
@@ -200,7 +210,7 @@ export function webhookGet(req: Request, res: Response): void {
   res.status(403).send('Forbidden');
 }
 
-export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapper, syncService?: SuiteCrmSyncService) {
+export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapper, syncService?: SuiteCrmSyncService, io?: SocketIOServer) {
   return async function webhookPost(req: Request, res: Response): Promise<void> {
     const header = req.header('X-Hub-Signature-256');
     if (!header || !header.startsWith('sha256=')) {
@@ -266,6 +276,20 @@ export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapp
               reqLog.info({ wamid: m.wamid, contactId }, 'contact mapped');
             }
           }
+
+          if (io) {
+            const event: NewMessageEvent = {
+              conversation_id: m.waId,
+              message_id: m.wamid,
+              channel: m.channel,
+              sender: m.waId,
+              text: m.body,
+              timestamp: m.timestamp,
+            };
+            io.emit('new_message', event);
+            io.to(m.channel).emit('new_message', event);
+            reqLog.debug({ wamid: m.wamid, channel: m.channel }, 'ws: new_message emitted');
+          }
         }
       } catch (err) {
         reqLog.error({ err, wamid: m.wamid }, 'failed to persist webhook message');
@@ -291,7 +315,7 @@ export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapp
   };
 }
 
-export function registerWebhookRoutes(app: Express, store: MessageStore, contactMapper?: ContactMapper, syncService?: SuiteCrmSyncService): void {
-  app.post('/webhook', express.raw({ type: 'application/json' }), makeWebhookPost(store, contactMapper, syncService));
+export function registerWebhookRoutes(app: Express, store: MessageStore, contactMapper?: ContactMapper, syncService?: SuiteCrmSyncService, io?: SocketIOServer): void {
+  app.post('/webhook', express.raw({ type: 'application/json' }), makeWebhookPost(store, contactMapper, syncService, io));
   app.get('/webhook', webhookGet);
 }

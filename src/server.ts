@@ -1,3 +1,4 @@
+import http from 'node:http';
 import mysql from 'mysql2/promise';
 import { createApp } from './app.js';
 import { config } from './config.js';
@@ -6,6 +7,7 @@ import { createMessageStore } from './db/wa_messages.js';
 import { SuiteCrmClient } from './services/suitecrm.js';
 import { ContactMapper } from './services/contact-mapper.js';
 import { createSuiteCrmSyncService } from './services/suitecrm-sync.js';
+import { createSocketServer, getConnectionCount } from './websocket.js';
 import type { CheckStatus, HealthChecks } from './services/health.js';
 
 const pool = mysql.createPool({
@@ -73,15 +75,25 @@ const healthChecks: HealthChecks = {
 
 const contactMapper = new ContactMapper(pool, suitecrm);
 
+const httpServer = http.createServer();
+const io = createSocketServer(httpServer);
+
 const app = createApp({
   messageStore: createMessageStore(pool),
   healthChecks,
   contactMapper,
   suiteCrmSync,
   firmasCrmPool,
+  io,
 });
 
-const server = app.listen(config.port, config.host, () => {
+httpServer.on('request', app);
+
+app.get('/ws-status', (_req, res) => {
+  res.json({ status: 'ok', connections: getConnectionCount() });
+});
+
+httpServer.listen(config.port, config.host, () => {
   logger.info(
     { host: config.host, port: config.port, env: config.nodeEnv },
     'meta-bridge listening',
@@ -90,7 +102,7 @@ const server = app.listen(config.port, config.host, () => {
 
 function shutdown(signal: string): void {
   logger.info({ signal }, 'shutting down');
-  server.close(async (err: Error | undefined) => {
+  httpServer.close(async (err: Error | undefined) => {
     await Promise.all([
       pool.end().catch((e: unknown) => logger.warn({ err: e }, 'error closing meta_bridge pool')),
       firmasCrmPool.end().catch((e: unknown) => logger.warn({ err: e }, 'error closing firmascrm pool')),
