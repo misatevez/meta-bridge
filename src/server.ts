@@ -1,3 +1,4 @@
+import { createServer } from 'node:http';
 import mysql from 'mysql2/promise';
 import { createApp } from './app.js';
 import { config } from './config.js';
@@ -7,6 +8,7 @@ import { SuiteCrmClient } from './services/suitecrm.js';
 import { ContactMapper } from './services/contact-mapper.js';
 import { createSuiteCrmSyncService } from './services/suitecrm-sync.js';
 import type { CheckStatus, HealthChecks } from './services/health.js';
+import { attachWebSocket, getConnectionCount } from './websocket.js';
 
 const pool = mysql.createPool({
   host: config.db.host,
@@ -81,7 +83,14 @@ const app = createApp({
   firmasCrmPool,
 });
 
-const server = app.listen(config.port, config.host, () => {
+const httpServer = createServer(app);
+attachWebSocket(httpServer);
+
+app.get('/ws-status', (_req, res) => {
+  res.json({ status: 'ok', connections: getConnectionCount() });
+});
+
+const server = httpServer.listen(config.port, config.host, () => {
   logger.info(
     { host: config.host, port: config.port, env: config.nodeEnv },
     'meta-bridge listening',
