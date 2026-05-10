@@ -14,6 +14,7 @@ import { evaluateHealth, type HealthChecks } from './services/health.js';
 import type { SuiteCrmSyncService } from './services/suitecrm-sync.js';
 import type { ContactMapper } from './services/contact-mapper.js';
 import type { Pool } from 'mysql2/promise';
+import type { Server as SocketIOServer } from 'socket.io';
 
 const NOOP_STORE: MessageStore = {
   async insertIncomingMessage() {
@@ -39,6 +40,7 @@ export interface AppDeps {
   suiteCrmSync?: SuiteCrmSyncService;
   contactMapper?: ContactMapper;
   firmasCrmPool?: Pool;
+  io?: SocketIOServer;
   webhookRateLimitMax?: number;
   webhookRateLimitWindowMs?: number;
 }
@@ -51,7 +53,7 @@ export function createApp(deps: AppDeps = {}): Express {
   const messageStore = deps.messageStore ?? NOOP_STORE;
   const healthChecks = deps.healthChecks ?? NOOP_HEALTH;
   const suiteCrmSync = deps.suiteCrmSync;
-  const { contactMapper, firmasCrmPool } = deps;
+  const { contactMapper, firmasCrmPool, io } = deps;
   const rateLimitMax = deps.webhookRateLimitMax ?? DEFAULT_WEBHOOK_RATE_LIMIT_MAX;
   const rateLimitWindow = deps.webhookRateLimitWindowMs ?? DEFAULT_WEBHOOK_RATE_LIMIT_WINDOW_MS;
 
@@ -98,7 +100,7 @@ export function createApp(deps: AppDeps = {}): Express {
   // Webhook routes mount their own raw-body parser scoped to POST /webhook so
   // HMAC can be verified over the unparsed payload. Must be registered before
   // the global express.json() so the JSON parser does not consume the stream.
-  registerWebhookRoutes(app, messageStore, contactMapper, suiteCrmSync);
+  registerWebhookRoutes(app, messageStore, contactMapper, suiteCrmSync, io);
 
   app.use(express.json({ limit: '1mb' }));
 
