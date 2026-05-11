@@ -84,6 +84,7 @@ const app = createApp({
   contactMapper,
   suiteCrmSync,
   firmasCrmPool,
+  metaBridgePool: pool,
   io,
 });
 

@@ -10,7 +10,9 @@ import { registerMessengerRoutes } from './routes/messenger.js';
 import { registerInstagramRoutes } from './routes/instagram.js';
 import { registerSendRoutes } from './routes/send.js';
 import { registerConversationRoutes } from './routes/conversations.js';
+import { registerMediaRoutes } from './routes/media.js';
 import type { MessageStore } from './db/wa_messages.js';
+import { createMetaMessageStore } from './db/meta_messages.js';
 import { evaluateHealth, type HealthChecks } from './services/health.js';
 import type { SuiteCrmSyncService } from './services/suitecrm-sync.js';
 import type { ContactMapper } from './services/contact-mapper.js';
@@ -41,6 +43,7 @@ export interface AppDeps {
   suiteCrmSync?: SuiteCrmSyncService;
   contactMapper?: ContactMapper;
   firmasCrmPool?: Pool;
+  metaBridgePool?: Pool;
   io?: SocketIOServer;
   webhookRateLimitMax?: number;
   webhookRateLimitWindowMs?: number;
@@ -54,7 +57,8 @@ export function createApp(deps: AppDeps = {}): Express {
   const messageStore = deps.messageStore ?? NOOP_STORE;
   const healthChecks = deps.healthChecks ?? NOOP_HEALTH;
   const suiteCrmSync = deps.suiteCrmSync;
-  const { contactMapper, firmasCrmPool, io } = deps;
+  const { contactMapper, firmasCrmPool, metaBridgePool, io } = deps;
+  const metaStore = metaBridgePool ? createMetaMessageStore(metaBridgePool) : undefined;
   const rateLimitMax = deps.webhookRateLimitMax ?? DEFAULT_WEBHOOK_RATE_LIMIT_MAX;
   const rateLimitWindow = deps.webhookRateLimitWindowMs ?? DEFAULT_WEBHOOK_RATE_LIMIT_WINDOW_MS;
 
@@ -101,7 +105,7 @@ export function createApp(deps: AppDeps = {}): Express {
   // Webhook routes mount their own raw-body parser scoped to POST /webhook so
   // HMAC can be verified over the unparsed payload. Must be registered before
   // the global express.json() so the JSON parser does not consume the stream.
-  registerWebhookRoutes(app, messageStore, contactMapper, suiteCrmSync, io, firmasCrmPool);
+  registerWebhookRoutes(app, messageStore, contactMapper, suiteCrmSync, io, firmasCrmPool, metaStore);
 
   app.use(express.json({ limit: '1mb' }));
 
@@ -111,6 +115,9 @@ export function createApp(deps: AppDeps = {}): Express {
   if (firmasCrmPool) {
     registerSendRoutes(app, firmasCrmPool);
     registerConversationRoutes(app, firmasCrmPool, io);
+  }
+  if (metaStore) {
+    registerMediaRoutes(app, metaStore);
   }
 
   app.get('/health', async (_req: Request, res: Response) => {
