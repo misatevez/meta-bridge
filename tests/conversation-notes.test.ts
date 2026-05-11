@@ -10,12 +10,21 @@ function makePool(queryFn: (...args: unknown[]) => unknown): Pool {
   return { query: vi.fn(queryFn) } as unknown as Pool;
 }
 
+/** Returns different responses per query call index. */
+function makeSequentialPool(responses: unknown[]): Pool {
+  let call = 0;
+  return { query: vi.fn(() => responses[call++] ?? [{ affectedRows: 0 }, []]) } as unknown as Pool;
+}
+
 const NOTE_1 = {
   id: 1,
-  conversation_id: 42,
+  conversation_id: '42',
   author: 'Agent Smith',
+  created_by: 'user1',
+  updated_by: null,
   content: 'Follow up needed',
   created_at: new Date('2026-05-11T00:00:00Z'),
+  updated_at: null,
 };
 
 describe('GET /api/conversations/:id/notes', () => {
@@ -46,16 +55,15 @@ describe('GET /api/conversations/:id/notes', () => {
     expect(res.body.notes).toEqual([]);
   });
 
-  it('returns 400 for non-numeric conversation id', async () => {
+  it('accepts UUID-style conversation ids', async () => {
     const pool = makePool(() => [[], []]);
     const app = createApp({ firmasCrmPool: pool });
 
     const res = await request(app)
-      .get('/api/conversations/abc/notes')
+      .get('/api/conversations/abc-uuid-123/notes')
       .set('Authorization', AUTH);
 
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe('invalid_conversation_id');
+    expect(res.status).toBe(200);
   });
 
   it('returns 401 without auth', async () => {
@@ -81,12 +89,11 @@ describe('GET /api/conversations/:id/notes', () => {
 
 describe('POST /api/conversations/:id/notes', () => {
   it('creates a note and returns it', async () => {
-    let callCount = 0;
-    const pool = makePool(() => {
-      callCount++;
-      if (callCount === 1) return [{ insertId: 5, affectedRows: 1 }, []];
-      return [[{ ...NOTE_1, id: 5 }], []];
-    });
+    const pool = makeSequentialPool([
+      [{ insertId: 5, affectedRows: 1 }, []],
+      [[{ ...NOTE_1, id: 5 }], []],
+      [{ affectedRows: 1 }, []],
+    ]);
     const app = createApp({ firmasCrmPool: pool });
 
     const res = await request(app)
@@ -100,12 +107,11 @@ describe('POST /api/conversations/:id/notes', () => {
   });
 
   it('emits note_added WS event on creation', async () => {
-    let callCount = 0;
-    const pool = makePool(() => {
-      callCount++;
-      if (callCount === 1) return [{ insertId: 7, affectedRows: 1 }, []];
-      return [[{ ...NOTE_1, id: 7 }], []];
-    });
+    const pool = makeSequentialPool([
+      [{ insertId: 7, affectedRows: 1 }, []],
+      [[{ ...NOTE_1, id: 7 }], []],
+      [{ affectedRows: 1 }, []],
+    ]);
     const emit = vi.fn();
     const io = { emit } as unknown as import('socket.io').Server;
     const app = createApp({ firmasCrmPool: pool, io });
@@ -115,7 +121,7 @@ describe('POST /api/conversations/:id/notes', () => {
       .set('Authorization', AUTH)
       .send({ author: 'Smith', content: 'Testing WS' });
 
-    expect(emit).toHaveBeenCalledWith('note_added', expect.objectContaining({ conversationId: 42 }));
+    expect(emit).toHaveBeenCalledWith('note_added', expect.objectContaining({ conversationId: '42' }));
   });
 
   it('returns 400 when author is missing', async () => {
@@ -144,19 +150,6 @@ describe('POST /api/conversations/:id/notes', () => {
     expect(res.body.error).toBe('missing_content');
   });
 
-  it('returns 400 for non-numeric conversation id', async () => {
-    const pool = makePool(() => [[], []]);
-    const app = createApp({ firmasCrmPool: pool });
-
-    const res = await request(app)
-      .post('/api/conversations/abc/notes')
-      .set('Authorization', AUTH)
-      .send({ author: 'Smith', content: 'Test' });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe('invalid_conversation_id');
-  });
-
   it('returns 401 without auth', async () => {
     const pool = makePool(() => [[], []]);
     const app = createApp({ firmasCrmPool: pool });
@@ -182,26 +175,204 @@ describe('POST /api/conversations/:id/notes', () => {
   });
 });
 
+describe('PUT /api/notes/:id', () => {
+  it('updates note content successfully', async () => {
+    const updatedNote = { ...NOTE_1, content: 'updated content', updated_by: 'user1' };
+    const pool = makeSequentialPool([
+      [[{ id: 1, conversation_id: '42', created_by: 'user1', content: 'original' }], []],
+      [{ affectedRows: 1 }, []],
+      [{ affectedRows: 1 }, []],
+      [[updatedNote], []],
+    ]);
+    const app = createApp({ firmasCrmPool: pool });
+
+    const res = await request(app)
+      .put('/api/notes/1')
+      .set('Authorization', AUTH)
+      .send({ user_id: 'user1', content: 'updated content' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.note.content).toBe('updated content');
+  });
+
+  it('returns 403 when non-owner tries to edit', async () => {
+    const pool = makePool(() => [[{ id: 1, conversation_id: '42', created_by: 'owner-user', content: 'original' }], []]);
+    const app = createApp({ firmasCrmPool: pool });
+
+    const res = await request(app)
+      .put('/api/notes/1')
+      .set('Authorization', AUTH)
+      .send({ user_id: 'other-user', content: 'hacked' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('forbidden');
+  });
+
+  it('allows admin to edit any note', async () => {
+    const updatedNote = { ...NOTE_1, content: 'admin edit', updated_by: 'admin-user' };
+    const pool = makeSequentialPool([
+      [[{ id: 1, conversation_id: '42', created_by: 'owner-user', content: 'original' }], []],
+      [{ affectedRows: 1 }, []],
+      [{ affectedRows: 1 }, []],
+      [[updatedNote], []],
+    ]);
+    const app = createApp({ firmasCrmPool: pool });
+
+    const res = await request(app)
+      .put('/api/notes/1')
+      .set('Authorization', AUTH)
+      .send({ user_id: 'admin-user', content: 'admin edit', is_admin: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  it('returns 400 when content is missing', async () => {
+    const pool = makePool(() => [[], []]);
+    const app = createApp({ firmasCrmPool: pool });
+
+    const res = await request(app)
+      .put('/api/notes/1')
+      .set('Authorization', AUTH)
+      .send({ user_id: 'user1' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('missing_content');
+  });
+
+  it('returns 400 when user_id is missing', async () => {
+    const pool = makePool(() => [[], []]);
+    const app = createApp({ firmasCrmPool: pool });
+
+    const res = await request(app)
+      .put('/api/notes/1')
+      .set('Authorization', AUTH)
+      .send({ content: 'new content' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('missing_user_id');
+  });
+
+  it('returns 404 when note does not exist', async () => {
+    const pool = makePool(() => [[], []]);
+    const app = createApp({ firmasCrmPool: pool });
+
+    const res = await request(app)
+      .put('/api/notes/999')
+      .set('Authorization', AUTH)
+      .send({ user_id: 'user1', content: 'content' });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('note_not_found');
+  });
+
+  it('returns 400 for non-numeric note id', async () => {
+    const pool = makePool(() => [[], []]);
+    const app = createApp({ firmasCrmPool: pool });
+
+    const res = await request(app)
+      .put('/api/notes/abc')
+      .set('Authorization', AUTH)
+      .send({ user_id: 'user1', content: 'content' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_note_id');
+  });
+
+  it('returns 401 without auth', async () => {
+    const pool = makePool(() => [[], []]);
+    const app = createApp({ firmasCrmPool: pool });
+
+    const res = await request(app)
+      .put('/api/notes/1')
+      .send({ user_id: 'user1', content: 'content' });
+
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 502 on db error', async () => {
+    const pool = makePool(() => { throw new Error('db gone'); });
+    const app = createApp({ firmasCrmPool: pool });
+
+    const res = await request(app)
+      .put('/api/notes/1')
+      .set('Authorization', AUTH)
+      .send({ user_id: 'user1', content: 'content' });
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toBe('db_error');
+  });
+});
+
 describe('DELETE /api/notes/:id', () => {
   it('deletes a note successfully', async () => {
-    const pool = makePool(() => [{ affectedRows: 1 }, []]);
+    const pool = makeSequentialPool([
+      [[{ id: 1, conversation_id: '42', created_by: 'user1', content: 'test' }], []],
+      [{ affectedRows: 1 }, []],
+      [{ affectedRows: 1 }, []],
+    ]);
+    const app = createApp({ firmasCrmPool: pool });
+
+    const res = await request(app)
+      .delete('/api/notes/1')
+      .set('Authorization', AUTH)
+      .send({ user_id: 'user1' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  it('returns 403 when non-owner tries to delete', async () => {
+    const pool = makePool(() => [[{ id: 1, conversation_id: '42', created_by: 'owner-user', content: 'test' }], []]);
+    const app = createApp({ firmasCrmPool: pool });
+
+    const res = await request(app)
+      .delete('/api/notes/1')
+      .set('Authorization', AUTH)
+      .send({ user_id: 'other-user' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('forbidden');
+  });
+
+  it('allows admin to delete any note', async () => {
+    const pool = makeSequentialPool([
+      [[{ id: 1, conversation_id: '42', created_by: 'owner-user', content: 'test' }], []],
+      [{ affectedRows: 1 }, []],
+      [{ affectedRows: 1 }, []],
+    ]);
+    const app = createApp({ firmasCrmPool: pool });
+
+    const res = await request(app)
+      .delete('/api/notes/1')
+      .set('Authorization', AUTH)
+      .send({ user_id: 'admin-user', is_admin: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  it('returns 400 when user_id is missing', async () => {
+    const pool = makePool(() => [[], []]);
     const app = createApp({ firmasCrmPool: pool });
 
     const res = await request(app)
       .delete('/api/notes/1')
       .set('Authorization', AUTH);
 
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('missing_user_id');
   });
 
   it('returns 404 when note does not exist', async () => {
-    const pool = makePool(() => [{ affectedRows: 0 }, []]);
+    const pool = makePool(() => [[], []]);
     const app = createApp({ firmasCrmPool: pool });
 
     const res = await request(app)
       .delete('/api/notes/999')
-      .set('Authorization', AUTH);
+      .set('Authorization', AUTH)
+      .send({ user_id: 'some-user' });
 
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('note_not_found');
@@ -233,7 +404,8 @@ describe('DELETE /api/notes/:id', () => {
 
     const res = await request(app)
       .delete('/api/notes/1')
-      .set('Authorization', AUTH);
+      .set('Authorization', AUTH)
+      .send({ user_id: 'some-user' });
 
     expect(res.status).toBe(502);
     expect(res.body.error).toBe('db_error');
