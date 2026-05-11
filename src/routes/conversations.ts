@@ -235,9 +235,9 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
 
   app.get('/api/conversations/:id/notes', requireBridgeKey, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
-    const id = parseInt(req.params['id'] as string, 10);
+    const id = (req.params['id'] as string).trim();
 
-    if (isNaN(id)) {
+    if (!id) {
       res.status(400).json({ success: false, error: 'invalid_conversation_id' });
       return;
     }
@@ -256,9 +256,9 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
 
   app.post('/api/conversations/:id/notes', requireBridgeKey, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
-    const id = parseInt(req.params['id'] as string, 10);
+    const id = (req.params['id'] as string).trim();
 
-    if (isNaN(id)) {
+    if (!id) {
       res.status(400).json({ success: false, error: 'invalid_conversation_id' });
       return;
     }
