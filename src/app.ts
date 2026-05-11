@@ -101,7 +101,7 @@ export function createApp(deps: AppDeps = {}): Express {
   // Webhook routes mount their own raw-body parser scoped to POST /webhook so
   // HMAC can be verified over the unparsed payload. Must be registered before
   // the global express.json() so the JSON parser does not consume the stream.
-  registerWebhookRoutes(app, messageStore, contactMapper, suiteCrmSync, io);
+  registerWebhookRoutes(app, messageStore, contactMapper, suiteCrmSync, io, firmasCrmPool);
 
   app.use(express.json({ limit: '1mb' }));
 
@@ -110,7 +110,7 @@ export function createApp(deps: AppDeps = {}): Express {
   registerInstagramRoutes(app);
   if (firmasCrmPool) {
     registerSendRoutes(app, firmasCrmPool);
-    registerConversationRoutes(app, firmasCrmPool);
+    registerConversationRoutes(app, firmasCrmPool, io);
   }
 
   app.get('/health', async (_req: Request, res: Response) => {
