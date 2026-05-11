@@ -9,6 +9,7 @@ interface CannedResponseRow extends RowDataPacket {
   content: string;
   channel: 'whatsapp' | 'messenger' | 'instagram' | 'all';
   shortcut: string | null;
+  created_by: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -22,15 +23,25 @@ const VALID_CHANNELS = ['whatsapp', 'messenger', 'instagram', 'all'];
 export function registerCannedResponseRoutes(app: Express, pool: Pool): void {
   app.get('/api/canned-responses', requireBridgeKey, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
-    const { channel } = req.query;
+    const { channel, created_by } = req.query;
 
     try {
       let query = `SELECT * FROM ${TABLE}`;
       const params: string[] = [];
+      const conditions: string[] = [];
 
       if (channel && typeof channel === 'string') {
-        query += ' WHERE channel = ? OR channel = "all"';
+        conditions.push('(channel = ? OR channel = "all")');
         params.push(channel);
+      }
+
+      if (created_by && typeof created_by === 'string') {
+        conditions.push('created_by = ?');
+        params.push(created_by);
+      }
+
+      if (conditions.length > 0) {
+        query += ' WHERE ' + conditions.join(' AND ');
       }
 
       query += ' ORDER BY id ASC';
@@ -45,11 +56,12 @@ export function registerCannedResponseRoutes(app: Express, pool: Pool): void {
 
   app.post('/api/canned-responses', requireBridgeKey, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
-    const { title, content, channel = 'all', shortcut } = req.body as {
+    const { title, content, channel = 'all', shortcut, created_by } = req.body as {
       title?: string;
       content?: string;
       channel?: string;
       shortcut?: string;
+      created_by?: string;
     };
 
     if (!title || !content) {
@@ -64,8 +76,8 @@ export function registerCannedResponseRoutes(app: Express, pool: Pool): void {
 
     try {
       const [result] = await pool.query<ResultSetHeader>(
-        `INSERT INTO ${TABLE} (title, content, channel, shortcut) VALUES (?, ?, ?, ?)`,
-        [title.trim(), content.trim(), channel, shortcut?.trim() ?? null],
+        `INSERT INTO ${TABLE} (title, content, channel, shortcut, created_by) VALUES (?, ?, ?, ?, ?)`,
+        [title.trim(), content.trim(), channel, shortcut?.trim() ?? null, created_by?.trim() ?? null],
       );
 
       const [rows] = await pool.query<CannedResponseRow[]>(
