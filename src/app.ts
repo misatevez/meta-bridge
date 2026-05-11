@@ -9,6 +9,7 @@ import { registerWhatsAppRoutes } from './routes/whatsapp.js';
 import { registerMessengerRoutes } from './routes/messenger.js';
 import { registerInstagramRoutes } from './routes/instagram.js';
 import { registerSendRoutes } from './routes/send.js';
+import { registerConversationRoutes } from './routes/conversations.js';
 import type { MessageStore } from './db/wa_messages.js';
 import { evaluateHealth, type HealthChecks } from './services/health.js';
 import type { SuiteCrmSyncService } from './services/suitecrm-sync.js';
@@ -109,6 +110,7 @@ export function createApp(deps: AppDeps = {}): Express {
   registerInstagramRoutes(app);
   if (firmasCrmPool) {
     registerSendRoutes(app, firmasCrmPool);
+    registerConversationRoutes(app, firmasCrmPool);
   }
 
   app.get('/health', async (_req: Request, res: Response) => {
