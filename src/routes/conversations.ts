@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from 'express';
 import type { Pool, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 import { logger } from '../logger.js';
-import { requireBridgeKey, requireBridgeKeyOrWsJwt } from '../middleware/auth.js';
+import { requireBridgeKey, requireBridgeKeyOrWsJwt, type AuthenticatedRequest } from '../middleware/auth.js';
 import type { Server as SocketIOServer } from 'socket.io';
 import type { MessageStore, MessageStatusRow } from '../db/wa_messages.js';
 
@@ -35,6 +35,15 @@ interface NoteRow extends RowDataPacket {
   created_at: Date;
 }
 
+interface UserRow extends RowDataPacket {
+  id: string;
+  is_admin: number;
+}
+
+interface AssignedConvRow extends RowDataPacket {
+  assigned_user_id: string | null;
+}
+
 export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io?: SocketIOServer, messageStore?: MessageStore): void {
   app.get('/api/conversations', requireBridgeKey, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
@@ -59,7 +68,8 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
     }
   });
 
-  app.post('/api/conversations/:id/assign', requireBridgeKey, async (req: Request, res: Response) => {
+  app.post('/api/conversations/:id/assign', requireBridgeKeyOrWsJwt, async (req: Request, res: Response) => {
+    const authReq = req as AuthenticatedRequest;
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
     const id = req.params['id'] as string;
     const { assigned_to } = req.body as { assigned_to?: unknown };
@@ -72,6 +82,41 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
     const assignee = assigned_to.trim();
 
     try {
+      // Validate assignee is a real SuiteCRM user
+      const [assigneeRows] = await firmasCrmPool.query<UserRow[]>(
+        'SELECT id, is_admin FROM users WHERE id = ? AND deleted = 0',
+        [assignee],
+      );
+      if (assigneeRows.length === 0) {
+        res.status(400).json({ success: false, error: 'invalid_assignee' });
+        return;
+      }
+
+      // WS JWT requests carry user identity — enforce role-based permission
+      if (authReq.authMethod === 'ws_jwt') {
+        const requestingUserId = authReq.jwtPayload?.sub;
+        if (!requestingUserId) {
+          res.status(403).json({ success: false, error: 'forbidden' });
+          return;
+        }
+
+        const [requesterRows] = await firmasCrmPool.query<UserRow[]>(
+          'SELECT id, is_admin FROM users WHERE id = ? AND deleted = 0',
+          [requestingUserId],
+        );
+        if (requesterRows.length === 0) {
+          res.status(403).json({ success: false, error: 'forbidden' });
+          return;
+        }
+
+        const isAdmin = requesterRows[0]!.is_admin === 1;
+        if (!isAdmin && requestingUserId !== assignee) {
+          reqLog.warn({ requestingUserId, assignee }, 'non-admin tried to assign to another user');
+          res.status(403).json({ success: false, error: 'forbidden' });
+          return;
+        }
+      }
+
       await firmasCrmPool.query(
         'UPDATE meta_conversations SET assigned_user_id = ? WHERE id = ?',
         [assignee, id],
@@ -89,11 +134,44 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
     }
   });
 
-  app.delete('/api/conversations/:id/assign', requireBridgeKey, async (req: Request, res: Response) => {
+  app.delete('/api/conversations/:id/assign', requireBridgeKeyOrWsJwt, async (req: Request, res: Response) => {
+    const authReq = req as AuthenticatedRequest;
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
     const id = req.params['id'] as string;
 
     try {
+      // WS JWT requests carry user identity — enforce role-based permission
+      if (authReq.authMethod === 'ws_jwt') {
+        const requestingUserId = authReq.jwtPayload?.sub;
+        if (!requestingUserId) {
+          res.status(403).json({ success: false, error: 'forbidden' });
+          return;
+        }
+
+        const [requesterRows] = await firmasCrmPool.query<UserRow[]>(
+          'SELECT id, is_admin FROM users WHERE id = ? AND deleted = 0',
+          [requestingUserId],
+        );
+        if (requesterRows.length === 0) {
+          res.status(403).json({ success: false, error: 'forbidden' });
+          return;
+        }
+
+        const isAdmin = requesterRows[0]!.is_admin === 1;
+        if (!isAdmin) {
+          // Non-admins can only unassign if the conversation is assigned to themselves
+          const [convRows] = await firmasCrmPool.query<AssignedConvRow[]>(
+            'SELECT assigned_user_id FROM meta_conversations WHERE id = ?',
+            [id],
+          );
+          if (convRows.length === 0 || convRows[0]!.assigned_user_id !== requestingUserId) {
+            reqLog.warn({ requestingUserId, id }, 'non-admin tried to unassign conversation not assigned to them');
+            res.status(403).json({ success: false, error: 'forbidden' });
+            return;
+          }
+        }
+      }
+
       await firmasCrmPool.query(
         'UPDATE meta_conversations SET assigned_user_id = NULL WHERE id = ?',
         [id],

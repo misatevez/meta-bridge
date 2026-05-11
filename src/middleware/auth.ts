@@ -3,6 +3,11 @@ import { createHmac } from 'crypto';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 
+export interface AuthenticatedRequest extends Request {
+  jwtPayload?: { sub?: string; exp?: number };
+  authMethod?: 'bridge_key' | 'ws_jwt';
+}
+
 export function requireBridgeKey(req: Request, res: Response, next: NextFunction): void {
   const apiKey = config.bridge.apiKey;
   if (apiKey === '') {
@@ -25,6 +30,7 @@ export function requireBridgeKey(req: Request, res: Response, next: NextFunction
     return;
   }
 
+  (req as AuthenticatedRequest).authMethod = 'bridge_key';
   next();
 }
 
@@ -75,6 +81,8 @@ export function requireWsJwt(req: Request, res: Response, next: NextFunction): v
     return;
   }
 
+  (req as AuthenticatedRequest).jwtPayload = payload;
+  (req as AuthenticatedRequest).authMethod = 'ws_jwt';
   next();
 }
 
