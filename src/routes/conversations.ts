@@ -9,6 +9,19 @@ interface UnreadRow extends RowDataPacket {
   count: number;
 }
 
+interface ConversationSearchRow extends RowDataPacket {
+  id: string;
+  channel: string;
+  display_name: string;
+  external_thread_id: string;
+  unread_count: number;
+  last_message_preview: string | null;
+  last_message_at: Date | null;
+  status: string;
+  assigned_user_id: string | null;
+  contact_id: string | null;
+}
+
 export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io?: SocketIOServer): void {
   app.get('/api/unread-counts', requireBridgeKey, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
@@ -79,6 +92,55 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
       res.json({ success: true });
     } catch (err) {
       reqLog.error({ err, conversation_id }, 'failed to mark conversation as read');
+      res.status(502).json({ success: false, error: 'db_error' });
+    }
+  });
+
+  app.get('/api/conversations/search', requireBridgeKey, async (req: Request, res: Response) => {
+    const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
+
+    const q = typeof req.query['q'] === 'string' ? req.query['q'].trim() : '';
+    const channel = typeof req.query['channel'] === 'string' ? req.query['channel'].trim() : '';
+    const assigned_to = typeof req.query['assigned_to'] === 'string' ? req.query['assigned_to'].trim() : '';
+
+    const conditions: string[] = ['c.deleted = 0'];
+    const params: unknown[] = [];
+
+    if (q) {
+      const pattern = `%${q}%`;
+      conditions.push('(c.display_name LIKE ? OR c.external_thread_id LIKE ? OR m.body LIKE ?)');
+      params.push(pattern, pattern, pattern);
+    }
+
+    if (channel) {
+      conditions.push('c.channel = ?');
+      params.push(channel);
+    }
+
+    if (assigned_to) {
+      conditions.push('c.assigned_user_id = ?');
+      params.push(assigned_to);
+    }
+
+    const whereClause = conditions.join(' AND ');
+
+    const sql = `
+      SELECT DISTINCT
+        c.id, c.channel, c.display_name, c.external_thread_id,
+        c.unread_count, c.last_message_preview, c.last_message_at,
+        c.status, c.assigned_user_id, c.contact_id
+      FROM meta_conversations c
+      LEFT JOIN meta_messages m ON m.conversation_id = c.id AND m.deleted = 0
+      WHERE ${whereClause}
+      ORDER BY c.last_message_at DESC
+      LIMIT 50
+    `;
+
+    try {
+      const [rows] = await firmasCrmPool.query<ConversationSearchRow[]>(sql, params);
+      res.json({ conversations: rows });
+    } catch (err) {
+      reqLog.error({ err, q, channel, assigned_to }, 'failed to search conversations');
       res.status(502).json({ success: false, error: 'db_error' });
     }
   });
