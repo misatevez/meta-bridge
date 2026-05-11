@@ -56,10 +56,11 @@ export function createMessageStore(pool: Pool): MessageStore {
         'SELECT `status` FROM `wa_messages` WHERE `wamid` = ? LIMIT 1',
         [wamid],
       );
-      if (rows.length === 0) {
+      const row = rows[0];
+      if (!row) {
         return { updated: false };
       }
-      const currentStatus = rows[0].status;
+      const currentStatus = row.status;
       if (!isValidStatusTransition(currentStatus, status)) {
         throw new Error(`Invalid status transition: ${currentStatus} → ${status}`);
       }
