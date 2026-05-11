@@ -111,7 +111,7 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
     }
   });
 
-  app.get('/api/unread-counts', requireBridgeKey, async (req: Request, res: Response) => {
+  app.get('/api/unread-counts', async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
 
     try {
