@@ -1,7 +1,6 @@
 import type { Express, Request, Response } from 'express';
 import type { Pool, RowDataPacket } from 'mysql2/promise';
 import { logger } from '../logger.js';
-import { requireBridgeKey } from '../middleware/auth.js';
 import type { Server as SocketIOServer } from 'socket.io';
 
 interface UnreadRow extends RowDataPacket {
@@ -10,7 +9,7 @@ interface UnreadRow extends RowDataPacket {
 }
 
 export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io?: SocketIOServer): void {
-  app.get('/api/unread-counts', requireBridgeKey, async (req: Request, res: Response) => {
+  app.get('/api/unread-counts', async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
 
     try {
@@ -19,20 +18,20 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
       );
 
       let whatsapp = 0;
-      let facebook = 0;
+      let messenger = 0;
       let instagram = 0;
 
       for (const row of rows) {
         if (row.channel === 'whatsapp') whatsapp = Number(row.count);
-        else if (row.channel === 'facebook') facebook = Number(row.count);
+        else if (row.channel === 'messenger') messenger = Number(row.count);
         else if (row.channel === 'instagram') instagram = Number(row.count);
       }
 
       res.json({
         whatsapp,
-        facebook,
+        messenger,
         instagram,
-        total: whatsapp + facebook + instagram,
+        total: whatsapp + messenger + instagram,
       });
     } catch (err) {
       reqLog.error({ err }, 'failed to query unread counts');
@@ -40,7 +39,7 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
     }
   });
 
-  app.post('/api/mark-read/:conversation_id', requireBridgeKey, async (req: Request, res: Response) => {
+  app.post('/api/mark-read/:conversation_id', async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
     const conversation_id = req.params['conversation_id'] as string;
 
@@ -61,14 +60,14 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
             'SELECT channel, SUM(unread_count) as count FROM meta_conversations WHERE deleted = 0 GROUP BY channel',
           );
           let whatsapp = 0;
-          let facebook = 0;
+          let messenger = 0;
           let instagram = 0;
           for (const row of rows) {
             if (row.channel === 'whatsapp') whatsapp = Number(row.count);
-            else if (row.channel === 'facebook') facebook = Number(row.count);
+            else if (row.channel === 'messenger') messenger = Number(row.count);
             else if (row.channel === 'instagram') instagram = Number(row.count);
           }
-          const counts = { whatsapp, facebook, instagram, total: whatsapp + facebook + instagram };
+          const counts = { whatsapp, messenger, instagram, total: whatsapp + messenger + instagram };
           io.emit('unread_update', counts);
           reqLog.debug({ counts, conversation_id }, 'ws: unread_update emitted after mark-read');
         } catch (err) {
