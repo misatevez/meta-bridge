@@ -19,6 +19,13 @@ export interface NewMessageEvent {
   timestamp: number;
 }
 
+export interface MessageStatusEvent {
+  conversation_id: string;
+  message_id: string;
+  status: string;
+  timestamp: number;
+}
+
 interface ParsedMessage {
   wamid: string;
   waId: string;
@@ -115,6 +122,50 @@ function parseWhatsAppMessages(payload: unknown): ParsedMessage[] {
           mimeType,
           mediaFilename,
         });
+      }
+    }
+  }
+  return out;
+}
+
+interface ParsedStatus {
+  wamid: string;
+  status: string;
+  timestamp: number;
+  recipientWaId: string;
+}
+
+function parseWhatsAppStatuses(payload: unknown): ParsedStatus[] {
+  const root = asObject(payload);
+  if (!root) return [];
+  if (root.object !== 'whatsapp_business_account') return [];
+  const entries = root.entry;
+  if (!Array.isArray(entries)) return [];
+
+  const out: ParsedStatus[] = [];
+  for (const entry of entries) {
+    const e = asObject(entry);
+    if (!e) continue;
+    const changes = e.changes;
+    if (!Array.isArray(changes)) continue;
+    for (const change of changes) {
+      const c = asObject(change);
+      if (!c) continue;
+      const value = asObject(c.value);
+      if (!value) continue;
+      const statuses = value.statuses;
+      if (!Array.isArray(statuses)) continue;
+      for (const s of statuses) {
+        const st = asObject(s);
+        if (!st) continue;
+        const id = st.id;
+        const status = st.status;
+        if (typeof id !== 'string' || id === '') continue;
+        if (typeof status !== 'string' || status === '') continue;
+        const rawTs = st.timestamp;
+        const timestamp = typeof rawTs === 'string' ? Number.parseInt(rawTs, 10) : typeof rawTs === 'number' ? rawTs : Math.floor(Date.now() / 1000);
+        const recipientWaId = typeof st.recipient_id === 'string' ? st.recipient_id : '';
+        out.push({ wamid: id, status, timestamp, recipientWaId });
       }
     }
   }
@@ -376,6 +427,32 @@ export function makeWebhookPost(
     }
 
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
+    // Process WhatsApp status updates (sent/delivered/read)
+    const statuses = parseWhatsAppStatuses(parsed);
+    for (const s of statuses) {
+      try {
+        const result = await store.updateMessageStatus(s.wamid, s.status);
+        if (result.updated) {
+          reqLog.info({ wamid: s.wamid, status: s.status }, 'message status updated');
+          if (io) {
+            const event: MessageStatusEvent = {
+              conversation_id: s.recipientWaId,
+              message_id: s.wamid,
+              status: s.status,
+              timestamp: s.timestamp,
+            };
+            io.emit('message_status', event);
+            io.to('whatsapp').emit('message_status', event);
+            reqLog.debug({ wamid: s.wamid, status: s.status }, 'ws: message_status emitted');
+          }
+        } else {
+          reqLog.debug({ wamid: s.wamid, status: s.status }, 'status update: wamid not found in DB');
+        }
+      } catch (err) {
+        reqLog.error({ err, wamid: s.wamid }, 'failed to update message status');
+      }
+    }
+
     const messages = parseIncomingMessages(parsed);
 
     for (const m of messages) {

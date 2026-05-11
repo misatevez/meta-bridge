@@ -3,6 +3,7 @@ import type { Pool, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 import { logger } from '../logger.js';
 import { requireBridgeKey } from '../middleware/auth.js';
 import type { Server as SocketIOServer } from 'socket.io';
+import type { MessageStore, MessageStatusRow } from '../db/wa_messages.js';
 
 interface UnreadRow extends RowDataPacket {
   channel: string;
@@ -34,7 +35,7 @@ interface NoteRow extends RowDataPacket {
   created_at: Date;
 }
 
-export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io?: SocketIOServer): void {
+export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io?: SocketIOServer, messageStore?: MessageStore): void {
   app.get('/api/conversations', requireBridgeKey, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
     const assigned_to = req.query['assigned_to'] as string | undefined;
@@ -323,4 +324,36 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
       res.status(502).json({ success: false, error: 'db_error' });
     }
   });
+  app.get('/api/messages/:conversationId/statuses', async (req: Request, res: Response) => {
+    const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
+    const conversationId = req.params['conversationId'] as string;
+
+    if (!conversationId || !conversationId.trim()) {
+      res.status(400).json({ success: false, error: 'missing_conversation_id' });
+      return;
+    }
+
+    if (!messageStore) {
+      res.status(503).json({ success: false, error: 'store_unavailable' });
+      return;
+    }
+
+    try {
+      const rows: MessageStatusRow[] = await messageStore.getMessageStatuses(conversationId.trim());
+      res.json({
+        success: true,
+        conversation_id: conversationId.trim(),
+        messages: rows.map((r) => ({
+          wamid: r.wamid,
+          status: r.status,
+          direction: r.direction,
+          created_at: r.created_at,
+        })),
+      });
+    } catch (err) {
+      reqLog.error({ err, conversationId }, 'failed to query message statuses');
+      res.status(502).json({ success: false, error: 'db_error' });
+    }
+  });
+
 }

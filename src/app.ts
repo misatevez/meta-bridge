@@ -27,6 +27,12 @@ const NOOP_STORE: MessageStore = {
   async updateContactId() {
     // no-op in tests
   },
+  async updateMessageStatus() {
+    return { updated: false };
+  },
+  async getMessageStatuses() {
+    return [];
+  },
 };
 
 const NOOP_HEALTH: HealthChecks = {
@@ -115,7 +121,7 @@ export function createApp(deps: AppDeps = {}): Express {
   registerInstagramRoutes(app);
   if (firmasCrmPool) {
     registerSendRoutes(app, firmasCrmPool);
-    registerConversationRoutes(app, firmasCrmPool, io);
+    registerConversationRoutes(app, firmasCrmPool, io, messageStore);
     registerCannedResponseRoutes(app, firmasCrmPool);
   }
   if (metaStore) {
