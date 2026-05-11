@@ -9,20 +9,99 @@ interface UnreadRow extends RowDataPacket {
   count: number;
 }
 
-interface ConversationSearchRow extends RowDataPacket {
+interface ConversationRow extends RowDataPacket {
   id: string;
   channel: string;
-  display_name: string;
+  channel_id: string;
   external_thread_id: string;
+  contact_id: string | null;
+  display_name: string | null;
+  status: string;
+  assigned_to: string | null;
   unread_count: number;
   last_message_preview: string | null;
   last_message_at: Date | null;
-  status: string;
-  assigned_user_id: string | null;
-  contact_id: string | null;
+  date_entered: Date;
+  date_modified: Date;
+  deleted: number;
 }
 
 export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io?: SocketIOServer): void {
+  app.get('/api/conversations', requireBridgeKey, async (req: Request, res: Response) => {
+    const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
+    const assigned_to = req.query['assigned_to'] as string | undefined;
+
+    try {
+      let query = 'SELECT * FROM meta_conversations WHERE deleted = 0';
+      const params: string[] = [];
+
+      if (assigned_to !== undefined && assigned_to !== '') {
+        query += ' AND assigned_to = ?';
+        params.push(assigned_to);
+      }
+
+      query += ' ORDER BY date_modified DESC LIMIT 100';
+
+      const [rows] = await firmasCrmPool.query<ConversationRow[]>(query, params);
+      res.json({ success: true, data: rows });
+    } catch (err) {
+      reqLog.error({ err }, 'failed to query conversations');
+      res.status(502).json({ success: false, error: 'db_error' });
+    }
+  });
+
+  app.post('/api/conversations/:id/assign', requireBridgeKey, async (req: Request, res: Response) => {
+    const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
+    const id = req.params['id'] as string;
+    const { assigned_to } = req.body as { assigned_to?: unknown };
+
+    if (!assigned_to || typeof assigned_to !== 'string' || !assigned_to.trim()) {
+      res.status(400).json({ success: false, error: 'missing_assigned_to' });
+      return;
+    }
+
+    const assignee = assigned_to.trim();
+
+    try {
+      await firmasCrmPool.query(
+        'UPDATE meta_conversations SET assigned_to = ? WHERE id = ?',
+        [assignee, id],
+      );
+
+      if (io) {
+        io.emit('conversation_assigned', { conversationId: id, assigned_to: assignee });
+        reqLog.debug({ id, assignee }, 'ws: conversation_assigned emitted');
+      }
+
+      res.json({ success: true });
+    } catch (err) {
+      reqLog.error({ err, id }, 'failed to assign conversation');
+      res.status(502).json({ success: false, error: 'db_error' });
+    }
+  });
+
+  app.delete('/api/conversations/:id/assign', requireBridgeKey, async (req: Request, res: Response) => {
+    const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
+    const id = req.params['id'] as string;
+
+    try {
+      await firmasCrmPool.query(
+        'UPDATE meta_conversations SET assigned_to = NULL WHERE id = ?',
+        [id],
+      );
+
+      if (io) {
+        io.emit('conversation_assigned', { conversationId: id, assigned_to: null });
+        reqLog.debug({ id }, 'ws: conversation_assigned (unassign) emitted');
+      }
+
+      res.json({ success: true });
+    } catch (err) {
+      reqLog.error({ err, id }, 'failed to unassign conversation');
+      res.status(502).json({ success: false, error: 'db_error' });
+    }
+  });
+
   app.get('/api/unread-counts', requireBridgeKey, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
 
@@ -118,7 +197,7 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
     }
 
     if (assigned_to) {
-      conditions.push('c.assigned_user_id = ?');
+      conditions.push('c.assigned_to = ?');
       params.push(assigned_to);
     }
 
@@ -128,7 +207,7 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
       SELECT DISTINCT
         c.id, c.channel, c.display_name, c.external_thread_id,
         c.unread_count, c.last_message_preview, c.last_message_at,
-        c.status, c.assigned_user_id, c.contact_id
+        c.status, c.assigned_to, c.contact_id
       FROM meta_conversations c
       LEFT JOIN meta_messages m ON m.conversation_id = c.id AND m.deleted = 0
       WHERE ${whereClause}
@@ -137,7 +216,7 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
     `;
 
     try {
-      const [rows] = await firmasCrmPool.query<ConversationSearchRow[]>(sql, params);
+      const [rows] = await firmasCrmPool.query<ConversationRow[]>(sql, params);
       res.json({ conversations: rows });
     } catch (err) {
       reqLog.error({ err, q, channel, assigned_to }, 'failed to search conversations');
