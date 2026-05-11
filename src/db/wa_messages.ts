@@ -1,5 +1,18 @@
 import type { Pool, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 
+// Valid message status progression — forward only
+const STATUS_ORDER = ['sent', 'delivered', 'read'] as const;
+type KnownStatus = (typeof STATUS_ORDER)[number];
+
+function isValidStatusTransition(from: string | null, to: string): boolean {
+  const fromIdx = from === null ? -1 : STATUS_ORDER.indexOf(from as KnownStatus);
+  const toIdx = STATUS_ORDER.indexOf(to as KnownStatus);
+  // Unknown statuses (e.g. 'failed', 'error') are allowed to pass through
+  if (toIdx === -1) return true;
+  // Must advance forward in the order; null means no prior status
+  return toIdx > fromIdx;
+}
+
 export interface IncomingMessage {
   wamid: string;
   waId: string;
@@ -39,6 +52,17 @@ export function createMessageStore(pool: Pool): MessageStore {
       );
     },
     async updateMessageStatus(wamid, status) {
+      const [rows] = await pool.query<(RowDataPacket & { status: string | null })[]>(
+        'SELECT `status` FROM `wa_messages` WHERE `wamid` = ? LIMIT 1',
+        [wamid],
+      );
+      if (rows.length === 0) {
+        return { updated: false };
+      }
+      const currentStatus = rows[0].status;
+      if (!isValidStatusTransition(currentStatus, status)) {
+        throw new Error(`Invalid status transition: ${currentStatus} → ${status}`);
+      }
       const [result] = await pool.execute<ResultSetHeader>(
         'UPDATE `wa_messages` SET `status` = ? WHERE `wamid` = ?',
         [status, wamid],
