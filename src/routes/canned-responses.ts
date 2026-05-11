@@ -13,13 +13,19 @@ interface CannedResponseRow extends RowDataPacket {
   updated_at: Date;
 }
 
+// canned_responses lives in meta_bridge DB; pool may connect to firmascrm DB,
+// so all queries use fully-qualified table name.
+const TABLE = 'meta_bridge.canned_responses';
+
+const VALID_CHANNELS = ['whatsapp', 'messenger', 'instagram', 'all'];
+
 export function registerCannedResponseRoutes(app: Express, pool: Pool): void {
   app.get('/api/canned-responses', requireBridgeKey, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
     const { channel } = req.query;
 
     try {
-      let query = 'SELECT * FROM canned_responses';
+      let query = `SELECT * FROM ${TABLE}`;
       const params: string[] = [];
 
       if (channel && typeof channel === 'string') {
@@ -51,20 +57,19 @@ export function registerCannedResponseRoutes(app: Express, pool: Pool): void {
       return;
     }
 
-    const validChannels = ['whatsapp', 'messenger', 'instagram', 'all'];
-    if (!validChannels.includes(channel)) {
+    if (!VALID_CHANNELS.includes(channel)) {
       res.status(400).json({ success: false, error: 'invalid channel' });
       return;
     }
 
     try {
       const [result] = await pool.query<ResultSetHeader>(
-        'INSERT INTO canned_responses (title, content, channel, shortcut) VALUES (?, ?, ?, ?)',
+        `INSERT INTO ${TABLE} (title, content, channel, shortcut) VALUES (?, ?, ?, ?)`,
         [title.trim(), content.trim(), channel, shortcut?.trim() ?? null],
       );
 
       const [rows] = await pool.query<CannedResponseRow[]>(
-        'SELECT * FROM canned_responses WHERE id = ?',
+        `SELECT * FROM ${TABLE} WHERE id = ?`,
         [result.insertId],
       );
 
@@ -96,8 +101,7 @@ export function registerCannedResponseRoutes(app: Express, pool: Pool): void {
       return;
     }
 
-    const validChannels = ['whatsapp', 'messenger', 'instagram', 'all'];
-    if (channel && !validChannels.includes(channel)) {
+    if (channel && !VALID_CHANNELS.includes(channel)) {
       res.status(400).json({ success: false, error: 'invalid channel' });
       return;
     }
@@ -113,7 +117,7 @@ export function registerCannedResponseRoutes(app: Express, pool: Pool): void {
 
       values.push(String(id));
       const [result] = await pool.query<ResultSetHeader>(
-        `UPDATE canned_responses SET ${fields.join(', ')} WHERE id = ?`,
+        `UPDATE ${TABLE} SET ${fields.join(', ')} WHERE id = ?`,
         values,
       );
 
@@ -123,7 +127,7 @@ export function registerCannedResponseRoutes(app: Express, pool: Pool): void {
       }
 
       const [rows] = await pool.query<CannedResponseRow[]>(
-        'SELECT * FROM canned_responses WHERE id = ?',
+        `SELECT * FROM ${TABLE} WHERE id = ?`,
         [id],
       );
 
@@ -145,7 +149,7 @@ export function registerCannedResponseRoutes(app: Express, pool: Pool): void {
 
     try {
       const [result] = await pool.query<ResultSetHeader>(
-        'DELETE FROM canned_responses WHERE id = ?',
+        `DELETE FROM ${TABLE} WHERE id = ?`,
         [id],
       );
 
