@@ -67,7 +67,7 @@ export function createApp(deps: AppDeps = {}): Express {
   app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', 'https://firmas.moacrm.com');
     res.header('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-    res.header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+    res.header('Access-Control-Allow-Methods', 'POST, GET, DELETE, OPTIONS');
     if (req.method === 'OPTIONS') {
       res.sendStatus(204);
       return;
