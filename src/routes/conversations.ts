@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from 'express';
 import type { Pool, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 import { logger } from '../logger.js';
-import { requireBridgeKey } from '../middleware/auth.js';
+import { requireBridgeKey, requireBridgeKeyOrWsJwt } from '../middleware/auth.js';
 import type { Server as SocketIOServer } from 'socket.io';
 import type { MessageStore, MessageStatusRow } from '../db/wa_messages.js';
 
@@ -184,7 +184,7 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
     }
   });
 
-  app.get('/api/conversations/search', requireBridgeKey, async (req: Request, res: Response) => {
+  app.get("/api/conversations/search", requireBridgeKeyOrWsJwt, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
 
     const q = typeof req.query['q'] === 'string' ? req.query['q'].trim() : '';
