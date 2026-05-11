@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from 'express';
-import type { Pool, RowDataPacket } from 'mysql2/promise';
+import type { Pool, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 import { logger } from '../logger.js';
 import { requireBridgeKey } from '../middleware/auth.js';
 import type { Server as SocketIOServer } from 'socket.io';
@@ -24,6 +24,14 @@ interface ConversationRow extends RowDataPacket {
   date_entered: Date;
   date_modified: Date;
   deleted: number;
+}
+
+interface NoteRow extends RowDataPacket {
+  id: number;
+  conversation_id: number;
+  author: string;
+  content: string;
+  created_at: Date;
 }
 
 export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io?: SocketIOServer): void {
@@ -220,6 +228,98 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
       res.json({ conversations: rows });
     } catch (err) {
       reqLog.error({ err, q, channel, assigned_to }, 'failed to search conversations');
+      res.status(502).json({ success: false, error: 'db_error' });
+    }
+  });
+
+  app.get('/api/conversations/:id/notes', requireBridgeKey, async (req: Request, res: Response) => {
+    const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
+    const id = parseInt(req.params['id'] as string, 10);
+
+    if (isNaN(id)) {
+      res.status(400).json({ success: false, error: 'invalid_conversation_id' });
+      return;
+    }
+
+    try {
+      const [rows] = await firmasCrmPool.query<NoteRow[]>(
+        'SELECT id, conversation_id, author, content, created_at FROM conversation_notes WHERE conversation_id = ? ORDER BY created_at ASC',
+        [id],
+      );
+      res.json({ success: true, notes: rows });
+    } catch (err) {
+      reqLog.error({ err, id }, 'failed to list conversation notes');
+      res.status(502).json({ success: false, error: 'db_error' });
+    }
+  });
+
+  app.post('/api/conversations/:id/notes', requireBridgeKey, async (req: Request, res: Response) => {
+    const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
+    const id = parseInt(req.params['id'] as string, 10);
+
+    if (isNaN(id)) {
+      res.status(400).json({ success: false, error: 'invalid_conversation_id' });
+      return;
+    }
+
+    const { author, content } = req.body as { author?: string; content?: string };
+
+    if (!author || typeof author !== 'string' || !author.trim()) {
+      res.status(400).json({ success: false, error: 'missing_author' });
+      return;
+    }
+    if (!content || typeof content !== 'string' || !content.trim()) {
+      res.status(400).json({ success: false, error: 'missing_content' });
+      return;
+    }
+
+    try {
+      const [result] = await firmasCrmPool.query<ResultSetHeader>(
+        'INSERT INTO conversation_notes (conversation_id, author, content) VALUES (?, ?, ?)',
+        [id, author.trim(), content.trim()],
+      );
+
+      const [rows] = await firmasCrmPool.query<NoteRow[]>(
+        'SELECT id, conversation_id, author, content, created_at FROM conversation_notes WHERE id = ?',
+        [result.insertId],
+      );
+      const note = rows[0];
+
+      if (io) {
+        io.emit('note_added', { conversationId: id, note });
+        reqLog.debug({ conversationId: id, noteId: note?.id }, 'ws: note_added emitted');
+      }
+
+      res.status(201).json({ success: true, note });
+    } catch (err) {
+      reqLog.error({ err, id }, 'failed to create conversation note');
+      res.status(502).json({ success: false, error: 'db_error' });
+    }
+  });
+
+  app.delete('/api/notes/:id', requireBridgeKey, async (req: Request, res: Response) => {
+    const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
+    const id = parseInt(req.params['id'] as string, 10);
+
+    if (isNaN(id)) {
+      res.status(400).json({ success: false, error: 'invalid_note_id' });
+      return;
+    }
+
+    try {
+      const [result] = await firmasCrmPool.query<ResultSetHeader>(
+        'DELETE FROM conversation_notes WHERE id = ?',
+        [id],
+      );
+
+      if (result.affectedRows === 0) {
+        res.status(404).json({ success: false, error: 'note_not_found' });
+        return;
+      }
+
+      res.json({ success: true });
+    } catch (err) {
+      reqLog.error({ err, id }, 'failed to delete conversation note');
       res.status(502).json({ success: false, error: 'db_error' });
     }
   });
