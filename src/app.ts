@@ -12,6 +12,7 @@ import { registerSendRoutes } from './routes/send.js';
 import { registerConversationRoutes } from './routes/conversations.js';
 import { registerMediaRoutes } from './routes/media.js';
 import { registerCannedResponseRoutes } from './routes/canned-responses.js';
+import { registerAssignmentRoutes } from './routes/assignments.js';
 import type { MessageStore } from './db/wa_messages.js';
 import { createMetaMessageStore } from './db/meta_messages.js';
 import { evaluateHealth, type HealthChecks } from './services/health.js';
@@ -126,6 +127,9 @@ export function createApp(deps: AppDeps = {}): Express {
   }
   if (metaStore) {
     registerMediaRoutes(app, metaStore);
+  }
+  if (metaBridgePool) {
+    registerAssignmentRoutes(app, metaBridgePool);
   }
 
   app.get('/health', async (_req: Request, res: Response) => {
