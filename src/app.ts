@@ -11,6 +11,7 @@ import { registerInstagramRoutes } from './routes/instagram.js';
 import { registerSendRoutes } from './routes/send.js';
 import { registerConversationRoutes } from './routes/conversations.js';
 import { registerMediaRoutes } from './routes/media.js';
+import { registerCannedResponseRoutes } from './routes/canned-responses.js';
 import type { MessageStore } from './db/wa_messages.js';
 import { createMetaMessageStore } from './db/meta_messages.js';
 import { evaluateHealth, type HealthChecks } from './services/health.js';
@@ -71,7 +72,7 @@ export function createApp(deps: AppDeps = {}): Express {
   app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', 'https://firmas.moacrm.com');
     res.header('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-    res.header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+    res.header('Access-Control-Allow-Methods', 'POST, GET, PUT, DELETE, OPTIONS');
     if (req.method === 'OPTIONS') {
       res.sendStatus(204);
       return;
@@ -115,6 +116,7 @@ export function createApp(deps: AppDeps = {}): Express {
   if (firmasCrmPool) {
     registerSendRoutes(app, firmasCrmPool);
     registerConversationRoutes(app, firmasCrmPool, io);
+    registerCannedResponseRoutes(app, firmasCrmPool);
   }
   if (metaStore) {
     registerMediaRoutes(app, metaStore);
