@@ -2,9 +2,11 @@ import crypto from 'node:crypto';
 import express, { type Express, type Request, type Response } from 'express';
 import { config } from '../config.js';
 import type { IncomingMessage, MessageStore } from '../db/wa_messages.js';
+import type { MetaMessageStore } from '../db/meta_messages.js';
 import { logger } from '../logger.js';
 import type { ContactMapper } from '../services/contact-mapper.js';
 import type { SuiteCrmSyncService } from '../services/suitecrm-sync.js';
+import { downloadWhatsAppMedia, downloadMessengerMedia } from '../services/media-downloader.js';
 import type { Server as SocketIOServer } from 'socket.io';
 import type { Pool, RowDataPacket } from 'mysql2/promise';
 
@@ -27,7 +29,13 @@ interface ParsedMessage {
   messageType: string;
   profileName: string;
   channel: 'whatsapp' | 'messenger' | 'instagram';
+  mediaId?: string;
+  mediaDirectUrl?: string;
+  mimeType?: string;
+  mediaFilename?: string;
 }
+
+const WHATSAPP_MEDIA_TYPES = new Set(['image', 'video', 'audio', 'document', 'sticker']);
 
 function asObject(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null;
@@ -80,6 +88,20 @@ function parseWhatsAppMessages(payload: unknown): ParsedMessage[] {
         const timestamp = typeof rawTs === 'string' ? Number.parseInt(rawTs, 10) : typeof rawTs === 'number' ? rawTs : Math.floor(Date.now() / 1000);
         const messageType = typeof msg.type === 'string' ? msg.type : 'text';
         const profileName = extractProfileName(value, waId);
+
+        let mediaId: string | undefined;
+        let mimeType: string | undefined;
+        let mediaFilename: string | undefined;
+
+        if (WHATSAPP_MEDIA_TYPES.has(messageType)) {
+          const mediaObj = asObject(msg[messageType]);
+          if (mediaObj) {
+            mediaId = typeof mediaObj.id === 'string' ? mediaObj.id : undefined;
+            mimeType = typeof mediaObj.mime_type === 'string' ? mediaObj.mime_type : undefined;
+            mediaFilename = typeof mediaObj.filename === 'string' ? mediaObj.filename : undefined;
+          }
+        }
+
         out.push({
           wamid: id,
           waId,
@@ -89,6 +111,9 @@ function parseWhatsAppMessages(payload: unknown): ParsedMessage[] {
           messageType,
           profileName,
           channel: 'whatsapp',
+          mediaId,
+          mimeType,
+          mediaFilename,
         });
       }
     }
@@ -119,19 +144,16 @@ function parseMessengerMessages(payload: unknown, channel: 'messenger' | 'instag
       const rawTs = m.timestamp;
       const timestamp = typeof rawTs === 'number' ? Math.floor(rawTs / 1000) : Math.floor(Date.now() / 1000);
 
-      // delivery receipts — log and skip
       if (m.delivery) {
         logger.debug({ psid, channel }, `${channel}: delivery receipt, skipping`);
         continue;
       }
 
-      // read receipts — log and skip
       if (m.read) {
         logger.debug({ psid, channel }, `${channel}: read receipt, skipping`);
         continue;
       }
 
-      // postback
       if (m.postback) {
         const pb = asObject(m.postback);
         const pbPayload = pb && typeof pb.payload === 'string' ? pb.payload : '';
@@ -151,12 +173,31 @@ function parseMessengerMessages(payload: unknown, channel: 'messenger' | 'instag
         continue;
       }
 
-      // text / attachment messages
       if (m.message) {
         const msg = asObject(m.message);
         if (!msg) continue;
         const mid = typeof msg.mid === 'string' && msg.mid ? msg.mid : `msg_${psid}_${timestamp}`;
         const body = typeof msg.text === 'string' ? msg.text : null;
+
+        let mediaDirectUrl: string | undefined;
+        let mimeType: string | undefined;
+        let mediaFilename: string | undefined;
+        let messageType = `${channel}_text`;
+
+        const attachments = Array.isArray(msg.attachments) ? msg.attachments as unknown[] : [];
+        if (attachments.length > 0) {
+          const att = asObject(attachments[0]);
+          if (att) {
+            const attTypeStr = typeof att.type === 'string' ? att.type : '';
+            const attPayload = asObject(att.payload);
+            if (attPayload) {
+              mediaDirectUrl = typeof attPayload.url === 'string' ? attPayload.url : undefined;
+              mimeType = typeof attPayload.mime_type === 'string' ? attPayload.mime_type : undefined;
+            }
+            if (attTypeStr) messageType = `${channel}_${attTypeStr}`;
+          }
+        }
+
         out.push({
           wamid: mid,
           waId: psid,
@@ -164,9 +205,12 @@ function parseMessengerMessages(payload: unknown, channel: 'messenger' | 'instag
           body,
           raw: m,
           timestamp,
-          messageType: `${channel}_text`,
+          messageType,
           profileName: psid,
           channel,
+          mediaDirectUrl,
+          mimeType,
+          mediaFilename,
         });
       }
     }
@@ -186,7 +230,6 @@ export function parseIncomingMessages(payload: unknown): ParsedMessage[] {
     return parseMessengerMessages(payload, 'instagram');
   }
 
-  // default: whatsapp_business_account
   return parseWhatsAppMessages(payload);
 }
 
@@ -217,6 +260,58 @@ async function queryUnreadCounts(pool: Pool): Promise<UnreadCounts> {
   return { whatsapp, facebook, instagram, total: whatsapp + facebook + instagram };
 }
 
+function processMediaAsync(m: ParsedMessage, metaStore: MetaMessageStore): void {
+  (async () => {
+    try {
+      const convId = await metaStore.findOrCreateConversation(m.waId, m.channel, m.senderPsid);
+      const { id: metaId } = await metaStore.insertMessage({
+        wamid: m.wamid,
+        conversationId: convId,
+        direction: 'in',
+        channel: m.channel,
+        senderPsid: m.senderPsid,
+        body: m.body,
+        rawPayload: m.raw,
+      });
+
+      if (metaId <= 0) return;
+
+      const hasMedia = m.mediaId !== undefined || m.mediaDirectUrl !== undefined;
+      if (!hasMedia) return;
+
+      let result = null;
+      if (m.mediaId) {
+        result = await downloadWhatsAppMedia(
+          m.mediaId,
+          config.waba.accessToken,
+          m.waId,
+          m.timestamp,
+          m.mediaFilename,
+        );
+      } else if (m.mediaDirectUrl && m.mimeType) {
+        result = await downloadMessengerMedia(
+          m.mediaDirectUrl,
+          m.waId,
+          m.timestamp,
+          m.mimeType,
+          m.mediaFilename,
+        );
+      }
+
+      if (result) {
+        await metaStore.updateMedia(m.wamid, {
+          mediaUrl: result.relativePath,
+          mediaType: result.mimeType,
+          mediaFilename: result.filename,
+        });
+        logger.info({ wamid: m.wamid, metaId, path: result.relativePath }, 'media: saved to meta_messages');
+      }
+    } catch (err) {
+      logger.warn({ err, wamid: m.wamid }, 'media: background processing failed');
+    }
+  })();
+}
+
 export function webhookGet(req: Request, res: Response): void {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -238,7 +333,14 @@ export function webhookGet(req: Request, res: Response): void {
   res.status(403).send('Forbidden');
 }
 
-export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapper, syncService?: SuiteCrmSyncService, io?: SocketIOServer, firmasCrmPool?: Pool) {
+export function makeWebhookPost(
+  store: MessageStore,
+  contactMapper?: ContactMapper,
+  syncService?: SuiteCrmSyncService,
+  io?: SocketIOServer,
+  firmasCrmPool?: Pool,
+  metaStore?: MetaMessageStore,
+) {
   return async function webhookPost(req: Request, res: Response): Promise<void> {
     const header = req.header('X-Hub-Signature-256');
     if (!header || !header.startsWith('sha256=')) {
@@ -305,6 +407,11 @@ export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapp
             }
           }
 
+          // Populate meta_messages and download media (non-blocking)
+          if (metaStore) {
+            processMediaAsync(m, metaStore);
+          }
+
           if (io) {
             const event: NewMessageEvent = {
               conversation_id: m.waId,
@@ -353,7 +460,15 @@ export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapp
   };
 }
 
-export function registerWebhookRoutes(app: Express, store: MessageStore, contactMapper?: ContactMapper, syncService?: SuiteCrmSyncService, io?: SocketIOServer, firmasCrmPool?: Pool): void {
-  app.post('/webhook', express.raw({ type: 'application/json' }), makeWebhookPost(store, contactMapper, syncService, io, firmasCrmPool));
+export function registerWebhookRoutes(
+  app: Express,
+  store: MessageStore,
+  contactMapper?: ContactMapper,
+  syncService?: SuiteCrmSyncService,
+  io?: SocketIOServer,
+  firmasCrmPool?: Pool,
+  metaStore?: MetaMessageStore,
+): void {
+  app.post('/webhook', express.raw({ type: 'application/json' }), makeWebhookPost(store, contactMapper, syncService, io, firmasCrmPool, metaStore));
   app.get('/webhook', webhookGet);
 }
