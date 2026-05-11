@@ -191,11 +191,24 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
     const channel = typeof req.query['channel'] === 'string' ? req.query['channel'].trim() : '';
     const assigned_to = typeof req.query['assigned_to'] === 'string' ? req.query['assigned_to'].trim() : '';
 
+    if (q.length > 200) {
+      res.status(400).json({ success: false, error: 'query_too_long' });
+      return;
+    }
+
+    const ALLOWED_CHANNELS = new Set(['', 'whatsapp', 'facebook', 'instagram']);
+    if (!ALLOWED_CHANNELS.has(channel)) {
+      res.status(400).json({ success: false, error: 'invalid_channel' });
+      return;
+    }
+
     const conditions: string[] = ['c.deleted = 0'];
     const params: unknown[] = [];
 
     if (q) {
-      const pattern = `%${q}%`;
+      // Escape LIKE metacharacters so user input is treated as a literal substring.
+      const escaped = q.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+      const pattern = `%${escaped}%`;
       conditions.push('(c.display_name LIKE ? OR c.external_thread_id LIKE ? OR m.body LIKE ?)');
       params.push(pattern, pattern, pattern);
     }
