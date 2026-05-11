@@ -29,10 +29,13 @@ interface ConversationRow extends RowDataPacket {
 
 interface NoteRow extends RowDataPacket {
   id: number;
-  conversation_id: number;
+  conversation_id: string;
   author: string;
+  created_by: string | null;
+  updated_by: string | null;
   content: string;
   created_at: Date;
+  updated_at: Date | null;
 }
 
 export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io?: SocketIOServer, messageStore?: MessageStore): void {
@@ -244,7 +247,7 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
 
     try {
       const [rows] = await firmasCrmPool.query<NoteRow[]>(
-        'SELECT id, conversation_id, author, content, created_at FROM conversation_notes WHERE conversation_id = ? ORDER BY created_at ASC',
+        'SELECT id, conversation_id, author, created_by, updated_by, content, created_at, updated_at FROM conversation_notes WHERE conversation_id = ? ORDER BY created_at ASC',
         [id],
       );
       res.json({ success: true, notes: rows });
@@ -276,15 +279,22 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
 
     try {
       const [result] = await firmasCrmPool.query<ResultSetHeader>(
-        'INSERT INTO conversation_notes (conversation_id, author, content) VALUES (?, ?, ?)',
-        [id, author.trim(), content.trim()],
+        'INSERT INTO conversation_notes (conversation_id, author, created_by, content) VALUES (?, ?, ?, ?)',
+        [id, author.trim(), author.trim(), content.trim()],
       );
 
+      const insertId = result.insertId;
+
       const [rows] = await firmasCrmPool.query<NoteRow[]>(
-        'SELECT id, conversation_id, author, content, created_at FROM conversation_notes WHERE id = ?',
-        [result.insertId],
+        'SELECT id, conversation_id, author, created_by, updated_by, content, created_at, updated_at FROM conversation_notes WHERE id = ?',
+        [insertId],
       );
       const note = rows[0];
+
+      await firmasCrmPool.query(
+        'INSERT INTO note_audit_log (note_id, conversation_id, action, user_id, new_content) VALUES (?, ?, ?, ?, ?)',
+        [insertId, id, 'create', author.trim(), content.trim()],
+      );
 
       if (io) {
         io.emit('note_added', { conversationId: id, note });
@@ -298,6 +308,68 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
     }
   });
 
+  app.put('/api/notes/:id', requireBridgeKey, async (req: Request, res: Response) => {
+    const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
+    const id = parseInt(req.params['id'] as string, 10);
+
+    if (isNaN(id)) {
+      res.status(400).json({ success: false, error: 'invalid_note_id' });
+      return;
+    }
+
+    const { user_id, content, is_admin } = req.body as { user_id?: string; content?: string; is_admin?: boolean };
+
+    if (!user_id || typeof user_id !== 'string' || !user_id.trim()) {
+      res.status(400).json({ success: false, error: 'missing_user_id' });
+      return;
+    }
+    if (!content || typeof content !== 'string' || !content.trim()) {
+      res.status(400).json({ success: false, error: 'missing_content' });
+      return;
+    }
+
+    try {
+      const [existing] = await firmasCrmPool.query<NoteRow[]>(
+        'SELECT id, conversation_id, created_by, content FROM conversation_notes WHERE id = ?',
+        [id],
+      );
+
+      if (existing.length === 0) {
+        res.status(404).json({ success: false, error: 'note_not_found' });
+        return;
+      }
+
+      const note = existing[0]!;
+
+      if (note.created_by && note.created_by !== user_id.trim() && !is_admin) {
+        reqLog.warn({ noteId: id, created_by: note.created_by, user_id }, 'unauthorized note edit attempt');
+        res.status(403).json({ success: false, error: 'forbidden' });
+        return;
+      }
+
+      const oldContent = note.content;
+      await firmasCrmPool.query(
+        'UPDATE conversation_notes SET content = ?, updated_by = ? WHERE id = ?',
+        [content.trim(), user_id.trim(), id],
+      );
+
+      await firmasCrmPool.query(
+        'INSERT INTO note_audit_log (note_id, conversation_id, action, user_id, old_content, new_content) VALUES (?, ?, ?, ?, ?, ?)',
+        [id, note.conversation_id, 'edit', user_id.trim(), oldContent, content.trim()],
+      );
+
+      const [updated] = await firmasCrmPool.query<NoteRow[]>(
+        'SELECT id, conversation_id, author, created_by, updated_by, content, created_at, updated_at FROM conversation_notes WHERE id = ?',
+        [id],
+      );
+
+      res.json({ success: true, note: updated[0] });
+    } catch (err) {
+      reqLog.error({ err, id }, 'failed to edit conversation note');
+      res.status(502).json({ success: false, error: 'db_error' });
+    }
+  });
+
   app.delete('/api/notes/:id', requireBridgeKey, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
     const id = parseInt(req.params['id'] as string, 10);
@@ -307,7 +379,37 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
       return;
     }
 
+    const { user_id, is_admin } = req.body as { user_id?: string; is_admin?: boolean };
+
+    if (!user_id || typeof user_id !== 'string' || !user_id.trim()) {
+      res.status(400).json({ success: false, error: 'missing_user_id' });
+      return;
+    }
+
     try {
+      const [existing] = await firmasCrmPool.query<NoteRow[]>(
+        'SELECT id, conversation_id, created_by, content FROM conversation_notes WHERE id = ?',
+        [id],
+      );
+
+      if (existing.length === 0) {
+        res.status(404).json({ success: false, error: 'note_not_found' });
+        return;
+      }
+
+      const note = existing[0]!;
+
+      if (note.created_by && note.created_by !== user_id.trim() && !is_admin) {
+        reqLog.warn({ noteId: id, created_by: note.created_by, user_id }, 'unauthorized note delete attempt');
+        res.status(403).json({ success: false, error: 'forbidden' });
+        return;
+      }
+
+      await firmasCrmPool.query(
+        'INSERT INTO note_audit_log (note_id, conversation_id, action, user_id, old_content) VALUES (?, ?, ?, ?, ?)',
+        [id, note.conversation_id, 'delete', user_id.trim(), note.content],
+      );
+
       const [result] = await firmasCrmPool.query<ResultSetHeader>(
         'DELETE FROM conversation_notes WHERE id = ?',
         [id],
