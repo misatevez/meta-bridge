@@ -8,8 +8,8 @@ import { logger } from '../logger.js';
 export function registerMediaRoutes(app: Express, metaStore: MetaMessageStore): void {
   app.get('/api/media/:messageId', async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
-    const rawId = req.params['messageId'];
-    const id = Number.parseInt(rawId ?? '', 10);
+    const rawId = String(req.params['messageId'] ?? '');
+    const id = Number.parseInt(rawId, 10);
 
     if (!Number.isFinite(id) || id <= 0) {
       res.status(400).json({ error: 'invalid_id' });
