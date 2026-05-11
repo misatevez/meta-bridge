@@ -6,6 +6,7 @@ import { logger } from '../logger.js';
 import type { ContactMapper } from '../services/contact-mapper.js';
 import type { SuiteCrmSyncService } from '../services/suitecrm-sync.js';
 import type { Server as SocketIOServer } from 'socket.io';
+import type { Pool, RowDataPacket } from 'mysql2/promise';
 
 export interface NewMessageEvent {
   conversation_id: string;
@@ -189,6 +190,33 @@ export function parseIncomingMessages(payload: unknown): ParsedMessage[] {
   return parseWhatsAppMessages(payload);
 }
 
+interface UnreadCountRow extends RowDataPacket {
+  channel: string;
+  count: number;
+}
+
+export interface UnreadCounts {
+  whatsapp: number;
+  facebook: number;
+  instagram: number;
+  total: number;
+}
+
+async function queryUnreadCounts(pool: Pool): Promise<UnreadCounts> {
+  const [rows] = await pool.query<UnreadCountRow[]>(
+    'SELECT channel, SUM(unread_count) as count FROM meta_conversations WHERE deleted = 0 GROUP BY channel',
+  );
+  let whatsapp = 0;
+  let facebook = 0;
+  let instagram = 0;
+  for (const row of rows) {
+    if (row.channel === 'whatsapp') whatsapp = Number(row.count);
+    else if (row.channel === 'facebook') facebook = Number(row.count);
+    else if (row.channel === 'instagram') instagram = Number(row.count);
+  }
+  return { whatsapp, facebook, instagram, total: whatsapp + facebook + instagram };
+}
+
 export function webhookGet(req: Request, res: Response): void {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -210,7 +238,7 @@ export function webhookGet(req: Request, res: Response): void {
   res.status(403).send('Forbidden');
 }
 
-export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapper, syncService?: SuiteCrmSyncService, io?: SocketIOServer) {
+export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapper, syncService?: SuiteCrmSyncService, io?: SocketIOServer, firmasCrmPool?: Pool) {
   return async function webhookPost(req: Request, res: Response): Promise<void> {
     const header = req.header('X-Hub-Signature-256');
     if (!header || !header.startsWith('sha256=')) {
@@ -296,7 +324,7 @@ export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapp
       }
 
       if (inserted && syncService) {
-        void syncService.syncMessage({
+        syncService.syncMessage({
           waId: m.waId,
           wamid: m.wamid,
           body: m.body,
@@ -307,7 +335,17 @@ export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapp
           contactIdSuitecrm: contactId,
           phoneNumberId: (m.channel === 'messenger' || m.channel === 'instagram') ? config.meta.pageId : config.waba.phoneNumberId,
           channel: m.channel,
-        });
+        }).then(async () => {
+          if (io && firmasCrmPool) {
+            try {
+              const counts = await queryUnreadCounts(firmasCrmPool);
+              io.emit('unread_update', counts);
+              reqLog.debug({ counts }, 'ws: unread_update emitted');
+            } catch (err) {
+              reqLog.error({ err }, 'ws: failed to emit unread_update');
+            }
+          }
+        }).catch(() => { /* sync failure already logged in syncMessage */ });
       }
     }
 
@@ -315,7 +353,7 @@ export function makeWebhookPost(store: MessageStore, contactMapper?: ContactMapp
   };
 }
 
-export function registerWebhookRoutes(app: Express, store: MessageStore, contactMapper?: ContactMapper, syncService?: SuiteCrmSyncService, io?: SocketIOServer): void {
-  app.post('/webhook', express.raw({ type: 'application/json' }), makeWebhookPost(store, contactMapper, syncService, io));
+export function registerWebhookRoutes(app: Express, store: MessageStore, contactMapper?: ContactMapper, syncService?: SuiteCrmSyncService, io?: SocketIOServer, firmasCrmPool?: Pool): void {
+  app.post('/webhook', express.raw({ type: 'application/json' }), makeWebhookPost(store, contactMapper, syncService, io, firmasCrmPool));
   app.get('/webhook', webhookGet);
 }
