@@ -45,7 +45,7 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
       const params: string[] = [];
 
       if (assigned_to !== undefined && assigned_to !== '') {
-        query += ' AND assigned_to = ?';
+        query += ' AND assigned_user_id = ?';
         params.push(assigned_to);
       }
 
@@ -73,7 +73,7 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
 
     try {
       await firmasCrmPool.query(
-        'UPDATE meta_conversations SET assigned_to = ? WHERE id = ?',
+        'UPDATE meta_conversations SET assigned_user_id = ? WHERE id = ?',
         [assignee, id],
       );
 
@@ -95,7 +95,7 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
 
     try {
       await firmasCrmPool.query(
-        'UPDATE meta_conversations SET assigned_to = NULL WHERE id = ?',
+        'UPDATE meta_conversations SET assigned_user_id = NULL WHERE id = ?',
         [id],
       );
 
@@ -206,7 +206,7 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
     }
 
     if (assigned_to) {
-      conditions.push('c.assigned_to = ?');
+      conditions.push('c.assigned_user_id = ?');
       params.push(assigned_to);
     }
 
@@ -216,7 +216,7 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
       SELECT DISTINCT
         c.id, c.channel, c.display_name, c.external_thread_id,
         c.unread_count, c.last_message_preview, c.last_message_at,
-        c.status, c.assigned_to, c.contact_id
+        c.status, c.assigned_user_id AS assigned_to, c.contact_id
       FROM meta_conversations c
       LEFT JOIN meta_messages m ON m.conversation_id = c.id AND m.deleted = 0
       WHERE ${whereClause}
