@@ -117,7 +117,7 @@ export function createApp(deps: AppDeps = {}): Express {
 
   app.use(express.json({ limit: '1mb' }));
 
-  registerWhatsAppRoutes(app);
+  registerWhatsAppRoutes(app, firmasCrmPool);
   registerMessengerRoutes(app);
   registerInstagramRoutes(app);
   if (firmasCrmPool) {
