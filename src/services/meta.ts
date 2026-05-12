@@ -137,6 +137,63 @@ export async function sendTextMessage(
   return { wamid };
 }
 
+export interface CreateTemplateInput {
+  name: string;
+  language: string;
+  category: string;
+  components: WaTemplateComponent[];
+}
+
+export interface CreateTemplateResult {
+  id: string;
+}
+
+export async function createTemplate(
+  wabaId: string,
+  accessToken: string,
+  input: CreateTemplateInput,
+): Promise<CreateTemplateResult> {
+  const res = await axios.post<{ id?: string }>(
+    `${META_GRAPH_BASE}/${wabaId}/message_templates`,
+    {
+      name: input.name,
+      language: input.language,
+      category: input.category,
+      components: input.components,
+    },
+    {
+      params: { access_token: accessToken },
+      timeout: 15_000,
+      validateStatus: () => true,
+    },
+  );
+
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`Meta templates API error ${res.status}: ${JSON.stringify(res.data)}`);
+  }
+
+  return { id: res.data.id ?? '' };
+}
+
+export async function deleteTemplate(
+  wabaId: string,
+  accessToken: string,
+  name: string,
+): Promise<void> {
+  const res = await axios.delete<unknown>(
+    `${META_GRAPH_BASE}/${wabaId}/message_templates`,
+    {
+      params: { access_token: accessToken, name },
+      timeout: 15_000,
+      validateStatus: () => true,
+    },
+  );
+
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`Meta templates API error ${res.status}: ${JSON.stringify(res.data)}`);
+  }
+}
+
 export async function sendTemplateRaw(
   phoneNumberId: string,
   accessToken: string,
