@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import type { Express, Request, Response } from 'express';
+import type { Pool, RowDataPacket } from 'mysql2/promise';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { requireBridgeKey } from '../middleware/auth.js';
@@ -20,7 +22,65 @@ const MOCK_TEMPLATES: WaTemplate[] = [
   },
 ];
 
-export function registerWhatsAppRoutes(app: Express): void {
+interface ConversationRow extends RowDataPacket {
+  id: string;
+}
+
+async function upsertTemplateConversation(
+  pool: Pool,
+  params: { phone: string; templateName: string; wamid: string; contactId: string | undefined; phoneNumberId: string },
+): Promise<void> {
+  const { phone, templateName, wamid, contactId, phoneNumberId } = params;
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.execute<ConversationRow[]>(
+      'SELECT id FROM meta_conversations WHERE external_thread_id = ? AND channel = ? AND deleted = 0 LIMIT 1',
+      [phone, 'whatsapp'],
+    );
+
+    let conversationId: string;
+    if (rows.length > 0) {
+      conversationId = rows[0]!.id;
+      if (contactId) {
+        await conn.execute(
+          'UPDATE meta_conversations SET contact_id = ?, date_modified = NOW() WHERE id = ? AND (contact_id IS NULL OR contact_id = "")',
+          [contactId, conversationId],
+        );
+      }
+    } else {
+      conversationId = randomUUID();
+      const now = new Date();
+      await conn.execute(
+        `INSERT INTO meta_conversations
+          (id, channel, channel_id, external_thread_id, contact_id, display_name, status, unread_count, date_entered, date_modified, deleted)
+         VALUES (?, 'whatsapp', ?, ?, ?, ?, 'open', 0, ?, ?, 0)`,
+        [conversationId, phoneNumberId, phone, contactId ?? '', phone, now, now],
+      );
+      logger.info({ conversationId, phone }, 'whatsapp: created meta_conversation for outbound template');
+    }
+
+    const body = `Template: ${templateName}`;
+    const messageId = randomUUID();
+    await conn.execute(
+      `INSERT INTO meta_messages
+        (id, name, conversation_id, external_message_id, direction, message_type, body, sent_at, status,
+         date_entered, date_modified, deleted, modified_user_id, created_by, assigned_user_id)
+       VALUES (?, LEFT(?, 200), ?, ?, 'out', 'template', ?, NOW(), 'sent', NOW(), NOW(), 0, '1', '1', '1')`,
+      [messageId, body, conversationId, wamid, body],
+    );
+
+    await conn.execute(
+      'UPDATE meta_conversations SET last_message_preview = LEFT(?, 200), last_message_at = NOW(), date_modified = NOW() WHERE id = ?',
+      [body, conversationId],
+    );
+
+    logger.info({ conversationId, wamid, messageId }, 'whatsapp: persisted outbound template message');
+  } finally {
+    conn.release();
+  }
+}
+
+export function registerWhatsAppRoutes(app: Express, firmasCrmPool?: Pool): void {
   app.get('/channels/whatsapp/templates', requireBridgeKey, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
     const { id: wabaId, accessToken } = config.waba;
@@ -124,6 +184,18 @@ export function registerWhatsAppRoutes(app: Express): void {
         'WhatsApp template message sent',
       );
       res.status(202).json({ message_id: result.wamid, status: 'pending' });
+
+      if (firmasCrmPool) {
+        upsertTemplateConversation(firmasCrmPool, {
+          phone: input.to,
+          templateName: input.templateName,
+          wamid: result.wamid,
+          contactId: input.contactId,
+          phoneNumberId,
+        }).catch((err) => {
+          reqLog.error({ err, to: input.to, template: input.templateName }, 'failed to upsert conversation after template send');
+        });
+      }
     } catch (err) {
       reqLog.error({ err, to: input.to, template: input.templateName }, 'failed to send WhatsApp');
       res.status(502).json({ error: 'send_failed' });
