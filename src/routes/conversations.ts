@@ -71,6 +71,24 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
     }
   });
 
+
+  // GET /api/conversations/:id -- fetch single conversation (used by widget for assigned_to / channel)
+  app.get('/api/conversations/:id', requireBridgeKeyOrWsJwt, async (req: Request, res: Response) => {
+    const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
+    const id = req.params['id'] as string;
+    try {
+      const [rows] = await firmasCrmPool.query<ConversationRow[]>(
+        'SELECT id, channel, assigned_user_id AS assigned_to, external_thread_id FROM meta_conversations WHERE id = ? AND deleted = 0 LIMIT 1',
+        [id],
+      );
+      if (!rows.length) { res.status(404).json({ error: 'not_found' }); return; }
+      res.json(rows[0]);
+    } catch (err) {
+      reqLog.error({ err, id }, 'failed to fetch conversation');
+      res.status(502).json({ error: 'db_error' });
+    }
+  });
+
   app.post('/api/conversations/:id/assign', requireBridgeKeyOrWsJwt, async (req: Request, res: Response) => {
     const authReq = req as AuthenticatedRequest;
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
@@ -222,7 +240,7 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
     }
   });
 
-  app.post('/api/mark-read/:conversation_id', requireBridgeKey, async (req: Request, res: Response) => {
+  app.post("/api/mark-read/:conversation_id", requireBridgeKeyOrWsJwt, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
     const conversation_id = req.params['conversation_id'] as string;
 
@@ -277,7 +295,7 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
       return;
     }
 
-    const ALLOWED_CHANNELS = new Set(['', 'whatsapp', 'facebook', 'instagram']);
+    const ALLOWED_CHANNELS = new Set(['', 'whatsapp', 'facebook', 'messenger', 'instagram']);
     if (!ALLOWED_CHANNELS.has(channel)) {
       res.status(400).json({ success: false, error: 'invalid_channel' });
       return;
@@ -327,7 +345,7 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
     }
   });
 
-  app.get('/api/conversations/:id/notes', requireBridgeKey, async (req: Request, res: Response) => {
+  app.get('/api/conversations/:id/notes', requireBridgeKeyOrWsJwt, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
     const id = (req.params['id'] as string).trim();
 
@@ -348,7 +366,7 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
     }
   });
 
-  app.post('/api/conversations/:id/notes', requireBridgeKey, async (req: Request, res: Response) => {
+  app.post('/api/conversations/:id/notes', requireBridgeKeyOrWsJwt, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
     const id = (req.params['id'] as string).trim();
 
@@ -399,7 +417,7 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
     }
   });
 
-  app.put('/api/notes/:id', requireBridgeKey, async (req: Request, res: Response) => {
+  app.put('/api/notes/:id', requireBridgeKeyOrWsJwt, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
     const id = parseInt(req.params['id'] as string, 10);
 
@@ -461,7 +479,7 @@ export function registerConversationRoutes(app: Express, firmasCrmPool: Pool, io
     }
   });
 
-  app.delete('/api/notes/:id', requireBridgeKey, async (req: Request, res: Response) => {
+  app.delete('/api/notes/:id', requireBridgeKeyOrWsJwt, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
     const id = parseInt(req.params['id'] as string, 10);
 

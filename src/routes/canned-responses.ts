@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from 'express';
 import type { Pool, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 import { logger } from '../logger.js';
-import { requireBridgeKey } from '../middleware/auth.js';
+import { requireBridgeKey, requireBridgeKeyOrWsJwt } from '../middleware/auth.js';
 
 interface CannedResponseRow extends RowDataPacket {
   id: number;
@@ -21,7 +21,7 @@ const TABLE = 'meta_bridge.canned_responses';
 const VALID_CHANNELS = ['whatsapp', 'messenger', 'instagram', 'all'];
 
 export function registerCannedResponseRoutes(app: Express, pool: Pool): void {
-  app.get('/api/canned-responses', requireBridgeKey, async (req: Request, res: Response) => {
+  app.get('/api/canned-responses', requireBridgeKeyOrWsJwt, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
     const { channel, created_by } = req.query;
 
@@ -54,7 +54,7 @@ export function registerCannedResponseRoutes(app: Express, pool: Pool): void {
     }
   });
 
-  app.post('/api/canned-responses', requireBridgeKey, async (req: Request, res: Response) => {
+  app.post('/api/canned-responses', requireBridgeKeyOrWsJwt, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
     const { title, content, channel = 'all', shortcut, created_by } = req.body as {
       title?: string;
@@ -92,7 +92,7 @@ export function registerCannedResponseRoutes(app: Express, pool: Pool): void {
     }
   });
 
-  app.put('/api/canned-responses/:id', requireBridgeKey, async (req: Request, res: Response) => {
+  app.put('/api/canned-responses/:id', requireBridgeKeyOrWsJwt, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
     const id = Number(req.params['id']);
 
@@ -150,7 +150,7 @@ export function registerCannedResponseRoutes(app: Express, pool: Pool): void {
     }
   });
 
-  app.delete('/api/canned-responses/:id', requireBridgeKey, async (req: Request, res: Response) => {
+  app.delete('/api/canned-responses/:id', requireBridgeKeyOrWsJwt, async (req: Request, res: Response) => {
     const reqLog = (req as Request & { log?: typeof logger }).log ?? logger;
     const id = Number(req.params['id']);
 

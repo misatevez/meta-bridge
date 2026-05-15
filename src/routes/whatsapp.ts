@@ -28,9 +28,11 @@ interface ConversationRow extends RowDataPacket {
 
 async function upsertTemplateConversation(
   pool: Pool,
-  params: { phone: string; templateName: string; wamid: string; contactId: string | undefined; phoneNumberId: string },
+  params: { phone: string; templateName: string; wamid: string; contactId: string | undefined; phoneNumberId: string; templateBody?: string },
 ): Promise<void> {
-  const { phone, templateName, wamid, contactId, phoneNumberId } = params;
+  const { templateName, wamid, contactId, phoneNumberId, templateBody } = params;
+  // Strip leading + so external_thread_id matches how Meta delivers waId in webhooks
+  const phone = params.phone.replace(/^\+/, "");
   const conn = await pool.getConnection();
   try {
     const [rows] = await conn.execute<ConversationRow[]>(
@@ -59,7 +61,7 @@ async function upsertTemplateConversation(
       logger.info({ conversationId, phone }, 'whatsapp: created meta_conversation for outbound template');
     }
 
-    const body = `Template: ${templateName}`;
+    const body = templateBody || `Template: ${templateName}`;
     const messageId = randomUUID();
     await conn.execute(
       `INSERT INTO meta_messages
@@ -137,6 +139,7 @@ export function registerWhatsAppRoutes(app: Express, firmasCrmPool?: Pool): void
       variables?: unknown;
       contact_id?: unknown;
       account_id?: unknown;
+      template_body?: unknown;
     };
 
     if (typeof body.to !== 'string' || !body.to.trim()) {
@@ -192,13 +195,14 @@ export function registerWhatsAppRoutes(app: Express, firmasCrmPool?: Pool): void
           wamid: result.wamid,
           contactId: input.contactId,
           phoneNumberId,
+          templateBody: typeof body.template_body === 'string' ? body.template_body : undefined,
         }).catch((err) => {
           reqLog.error({ err, to: input.to, template: input.templateName }, 'failed to upsert conversation after template send');
         });
       }
     } catch (err) {
       reqLog.error({ err, to: input.to, template: input.templateName }, 'failed to send WhatsApp');
-      res.status(502).json({ error: 'send_failed' });
+      const detail = err instanceof Error ? err.message : String(err); res.status(502).json({ error: "send_failed", detail });
     }
   });
 
